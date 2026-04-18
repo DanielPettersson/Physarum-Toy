@@ -15,6 +15,10 @@ struct Config {
     width: u32,
     height: u32,
     delta_time: f32,
+    diffuse_speed: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0)
@@ -26,7 +30,7 @@ var trail_map: texture_storage_2d<rgba16float, read_write>;
 @group(0) @binding(2)
 var<uniform> config: Config;
 
-// Simple pseudo-random function
+// Simple pseudo-random function for agent behavior
 fn hash(u: u32) -> u32 {
     var x = u;
     x = x ^ (x >> 16u);
@@ -68,9 +72,10 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     if (v_fwd > v_left && v_fwd > v_right) {
         // Continue forward if strongest trail is ahead
     } else if (v_fwd < v_left && v_fwd < v_right) {
-        // Turn randomly if forward is weaker than both sides
+        // Turn randomly if forward is weaker than both sides.
+        // Brownian motion scaling: sqrt(dt / reference_dt) where reference_dt is 1/60s.
         let random_val = f32(hash(agent_index ^ u32(agent.pos.x * 1000.0) ^ u32(agent.pos.y * 1000.0))) / 4294967295.0;
-        agent.angle += (random_val - 0.5) * 2.0 * config.turn_speed * config.delta_time;
+        agent.angle += (random_val - 0.5) * 2.0 * config.turn_speed * sqrt(max(config.delta_time, 0.0001) / 60.0);
     } else if (v_left > v_right) {
         // Turn left if strongest trail is to the left
         agent.angle += config.turn_speed * config.delta_time;
@@ -117,9 +122,14 @@ fn diffuse(@builtin(global_invocation_id) id: vec3<u32>) {
     
     let blurred = sum / 9.0;
     
-    // Apply decay
-    let decay_factor = (1.0 - config.decay * config.delta_time);
-    var decayed = vec4<f32>(blurred.rgb * decay_factor, 1.0);
+    // Time-dependent diffusion: Mix original pixel with blurred pixel based on speed and delta_time
+    let original = textureLoad(trail_map, vec2<i32>(x, y));
+    let mix_factor = clamp(config.diffuse_speed * config.delta_time, 0.0, 1.0);
+    let diffused = mix(original, blurred, mix_factor);
+
+    // Apply decay (clamped to avoid negative colors at very low framerates)
+    let decay_factor = max(0.0, 1.0 - config.decay * config.delta_time);
+    var decayed = vec4<f32>(diffused.rgb * decay_factor, 1.0);
         
     textureStore(trail_map, vec2<i32>(x, y), decayed);
 }

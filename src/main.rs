@@ -66,6 +66,10 @@ fn main() {
                 width: SIZE.0,
                 height: SIZE.1,
                 delta_time: 0.0,
+                diffuse_speed: 60.0,
+                _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
             },
         })
         .add_systems(Startup, setup)
@@ -123,6 +127,14 @@ struct PhysarumConfig {
     height: u32,
     /// Time elapsed since the last frame.
     delta_time: f32,
+    /// Speed of pheromone diffusion.
+    diffuse_speed: f32,
+    /// Padding for WebGPU 16-byte uniform alignment (size must be multiple of 16).
+    _pad0: f32,
+    /// Padding for WebGPU 16-byte uniform alignment (size must be multiple of 16).
+    _pad1: f32,
+    /// Padding for WebGPU 16-byte uniform alignment (size must be multiple of 16).
+    _pad2: f32,
 }
 
 /// Initializes the simulation resources, agents, and camera.
@@ -170,6 +182,23 @@ fn setup(
         agents: agents_buffer,
         trail_map: trail_map_handle.clone(),
         shader,
+    });
+
+    commands.insert_resource(PhysarumConfigResource {
+        config: PhysarumConfig {
+            sensor_angle: 0.35,
+            sensor_dist: 15.0,
+            turn_speed: 10.0,
+            move_speed: 50.0,
+            decay: 1., // Ratio of the trail that decays each second (can be above one)
+            width: SIZE.0,
+            height: SIZE.1,
+            delta_time: 0.0,
+            diffuse_speed: 60.0, // Match old 60fps behavior (100% blur per frame)
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        },
     });
 
     commands.spawn(Camera2d);
