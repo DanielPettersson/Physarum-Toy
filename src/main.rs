@@ -21,7 +21,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Physarum Simulation".to_string(),
+                title: "Physarum Toy".to_string(),
                 ..default()
             }),
             ..default()
