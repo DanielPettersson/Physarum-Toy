@@ -83,7 +83,7 @@ fn main() {
             },
         })
         .add_systems(Startup, setup)
-        .add_systems(Update, (update_config, move_fps_overlay, update_mouse_light))
+        .add_systems(Update, (update_config, move_fps_overlay, update_mouse_light, update_wandering_lights))
         .add_systems(EguiPrimaryContextPass, physarum_ui)
         .add_plugins(PhysarumComputePlugin)
         .run();
@@ -111,6 +111,15 @@ struct PhysarumConfigResource {
 /// Marker component for the light that follows the mouse.
 #[derive(Component)]
 struct MouseLight;
+
+/// Marker component for lights that move autonomously.
+#[derive(Component)]
+struct WanderingLight {
+    /// Current velocity of the light.
+    velocity: Vec2,
+    /// Time until the next direction change.
+    timer: f32,
+}
 
 /// Representation of a single agent.
 #[repr(C)]
@@ -221,12 +230,13 @@ fn setup(
     });
 
     // Spawn 3D Camera positioned directly above the simulation
+    // We move it back to ~1300 to better fit the 1080 height
     commands.spawn((
         Camera3d::default(),
         AmbientLight {
             ..default()
         },
-        Transform::from_xyz(SIZE.0 as f32 / 2.0, SIZE.1 as f32 / 2.0, 1000.0)
+        Transform::from_xyz(SIZE.0 as f32 / 2.0, SIZE.1 as f32 / 2.0, 1300.0)
             .looking_at(Vec3::new(SIZE.0 as f32 / 2.0, SIZE.1 as f32 / 2.0, 0.0), Vec3::Y),
     ));
 
@@ -241,6 +251,28 @@ fn setup(
         Transform::from_xyz(SIZE.0 as f32 / 2.0, SIZE.1 as f32 / 2.0, 50.0),
         MouseLight,
     ));
+
+    // Spawn some wandering lights
+    for _ in 0..15 {
+        let x = rng.random_range(100.0..SIZE.0 as f32 - 100.0);
+        let y = rng.random_range(100.0..SIZE.1 as f32 - 100.0);
+        let angle = rng.random_range(0.0..std::f32::consts::TAU);
+        let speed = rng.random_range(30.0..100.0);
+        commands.spawn((
+            PointLight {
+                intensity: 40_000_000.0,
+                range: 2000.0,
+                shadows_enabled: false,
+                color: Color::srgb(rng.random_range(0.9..1.0), rng.random_range(0.9..1.0), rng.random_range(0.9..1.0)),
+                ..default()
+            },
+            Transform::from_xyz(x, y, 50.0),
+            WanderingLight {
+                velocity: Vec2::new(angle.cos(), angle.sin()) * speed,
+                timer: rng.random_range(1.0..3.0),
+            },
+        ));
+    }
 
     // Display the trail map on a 3D Mesh with normal mapping
     commands.spawn((
@@ -434,6 +466,46 @@ fn update_mouse_light(
             light_transform.translation.x = intersection.x;
             light_transform.translation.y = intersection.y;
             light_transform.translation.z = 50.0;
+        }
+    }
+}
+
+/// Updates the position of wandering lights, causing them to move autonomously and bounce off walls.
+fn update_wandering_lights(
+    time: Res<Time>,
+    mut light_query: Query<(&mut Transform, &mut WanderingLight)>,
+) {
+    let mut rng = rand::rng();
+    for (mut transform, mut wandering) in &mut light_query {
+        wandering.timer -= time.delta_secs();
+        if wandering.timer <= 0.0 {
+            // Change direction slightly
+            let angle = rng.random_range(-0.5..0.5f32);
+            let speed = wandering.velocity.length();
+            let new_angle = wandering.velocity.y.atan2(wandering.velocity.x) + angle;
+            wandering.velocity = Vec2::new(new_angle.cos(), new_angle.sin()) * speed;
+            wandering.timer = rng.random_range(1.0..3.0);
+        }
+
+        transform.translation.x += wandering.velocity.x * time.delta_secs();
+        transform.translation.y += wandering.velocity.y * time.delta_secs();
+
+        // Bounce off walls with a margin to keep them on-screen
+        let margin = 100.0;
+        if transform.translation.x < margin {
+            transform.translation.x = margin;
+            wandering.velocity.x *= -1.0;
+        } else if transform.translation.x > SIZE.0 as f32 - margin {
+            transform.translation.x = SIZE.0 as f32 - margin;
+            wandering.velocity.x *= -1.0;
+        }
+
+        if transform.translation.y < margin {
+            transform.translation.y = margin;
+            wandering.velocity.y *= -1.0;
+        } else if transform.translation.y > SIZE.1 as f32 - margin {
+            transform.translation.y = SIZE.1 as f32 - margin;
+            wandering.velocity.y *= -1.0;
         }
     }
 }
