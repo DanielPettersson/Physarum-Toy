@@ -1,14 +1,16 @@
+use bevy::dev_tools::fps_overlay::FrameTimeGraphConfig;
 use bevy::{
+    dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin},
     prelude::*,
     render::{
+        Render, RenderApp,
         extract_resource::{ExtractResource, ExtractResourcePlugin},
         render_asset::RenderAssets,
         render_graph::{self, RenderGraph, RenderLabel},
         render_resource::*,
         renderer::{RenderContext, RenderDevice, RenderQueue},
-        storage::{ShaderStorageBuffer, GpuShaderStorageBuffer},
+        storage::{GpuShaderStorageBuffer, ShaderStorageBuffer},
         texture::GpuImage,
-        Render, RenderApp,
     },
 };
 use bytemuck::{Pod, Zeroable};
@@ -26,11 +28,26 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(FpsOverlayPlugin {
+            config: FpsOverlayConfig {
+                text_config: TextFont {
+                    font_size: 10.0,
+                    ..default()
+                },
+                text_color: Color::srgb(1.0, 0.0, 0.0),
+                frame_time_graph_config: FrameTimeGraphConfig {
+                    enabled: false,
+                    ..default()
+                },
+                enabled: true,
+                ..default()
+            },
+        })
         .add_plugins(ExtractResourcePlugin::<PhysarumResources>::default())
         .add_plugins(ExtractResourcePlugin::<PhysarumConfigResource>::default())
         .insert_resource(PhysarumConfigResource {
             config: PhysarumConfig {
-                sensor_angle: 0.35, 
+                sensor_angle: 0.35,
                 sensor_dist: 15.0,
                 turn_speed: 10.0,
                 move_speed: 50.0,
@@ -41,7 +58,7 @@ fn main() {
             },
         })
         .add_systems(Startup, setup)
-        .add_systems(Update, update_config)
+        .add_systems(Update, (update_config, move_fps_overlay))
         .add_plugins(PhysarumComputePlugin)
         .run();
 }
@@ -97,7 +114,8 @@ fn setup(
         TextureFormat::Rgba8Unorm,
         bevy::asset::RenderAssetUsages::RENDER_WORLD,
     );
-    image.texture_descriptor.usage |= TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
+    image.texture_descriptor.usage |=
+        TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
     let trail_map_handle = images.add(image);
 
     // Initialize agents
@@ -125,7 +143,7 @@ fn setup(
     });
 
     commands.spawn(Camera2d);
-    
+
     // Display the trail map
     commands.spawn(Sprite {
         image: trail_map_handle,
@@ -136,6 +154,16 @@ fn setup(
 
 fn update_config(time: Res<Time>, mut config_res: ResMut<PhysarumConfigResource>) {
     config_res.config.delta_time = time.delta_secs();
+}
+
+fn move_fps_overlay(mut query: Query<(&mut Node, &GlobalZIndex)>) {
+    for (mut node, z_index) in &mut query {
+        if z_index.0 == i32::MAX - 32 {
+            node.top = Val::Auto;
+            node.bottom = Val::Px(10.0);
+            node.left = Val::Px(10.0);
+        }
+    }
 }
 
 // --- Compute Infrastructure ---
@@ -179,8 +207,10 @@ fn prepare_bind_group(
     config_res: Option<Res<PhysarumConfigResource>>,
     pipeline_cache: Res<PipelineCache>,
 ) {
-    let (Some(resources), Some(config_res)) = (resources, config_res) else { return };
-    
+    let (Some(resources), Some(config_res)) = (resources, config_res) else {
+        return;
+    };
+
     if pipeline.bind_group_layout.is_none() {
         let entries = vec![
             BindGroupLayoutEntry {
@@ -214,41 +244,54 @@ fn prepare_bind_group(
                 count: None,
             },
         ];
-        
+
         let layout_descriptor = BindGroupLayoutDescriptor {
             label: "physarum_layout".into(),
             entries: entries.into(),
         };
-        let layout = render_device.create_bind_group_layout(Some(&*layout_descriptor.label), &layout_descriptor.entries);
-        
-        pipeline.simulate_pipeline = Some(pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-            label: Some("physarum_simulate_pipeline".into()),
-            layout: vec![layout_descriptor.clone()],
-            push_constant_ranges: vec![],
-            shader: resources.shader.clone(),
-            shader_defs: vec![],
-            entry_point: Some("simulate".into()),
-            zero_initialize_workgroup_memory: false,
-        }));
+        let layout = render_device
+            .create_bind_group_layout(Some(&*layout_descriptor.label), &layout_descriptor.entries);
 
-        pipeline.diffuse_pipeline = Some(pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-            label: Some("physarum_diffuse_pipeline".into()),
-            layout: vec![layout_descriptor],
-            push_constant_ranges: vec![],
-            shader: resources.shader.clone(),
-            shader_defs: vec![],
-            entry_point: Some("diffuse".into()),
-            zero_initialize_workgroup_memory: false,
-        }));
-        
+        pipeline.simulate_pipeline = Some(pipeline_cache.queue_compute_pipeline(
+            ComputePipelineDescriptor {
+                label: Some("physarum_simulate_pipeline".into()),
+                layout: vec![layout_descriptor.clone()],
+                push_constant_ranges: vec![],
+                shader: resources.shader.clone(),
+                shader_defs: vec![],
+                entry_point: Some("simulate".into()),
+                zero_initialize_workgroup_memory: false,
+            },
+        ));
+
+        pipeline.diffuse_pipeline = Some(pipeline_cache.queue_compute_pipeline(
+            ComputePipelineDescriptor {
+                label: Some("physarum_diffuse_pipeline".into()),
+                layout: vec![layout_descriptor],
+                push_constant_ranges: vec![],
+                shader: resources.shader.clone(),
+                shader_defs: vec![],
+                entry_point: Some("diffuse".into()),
+                zero_initialize_workgroup_memory: false,
+            },
+        ));
+
         pipeline.bind_group_layout = Some(layout);
     }
 
-    let Some(trail_map) = render_assets.get(&resources.trail_map) else { return };
-    let Some(agents_buffer) = render_buffers.get(&resources.agents) else { return };
-    let Some(simulate_id) = pipeline.simulate_pipeline else { return };
-    let Some(_) = pipeline_cache.get_compute_pipeline(simulate_id) else { return };
-    
+    let Some(trail_map) = render_assets.get(&resources.trail_map) else {
+        return;
+    };
+    let Some(agents_buffer) = render_buffers.get(&resources.agents) else {
+        return;
+    };
+    let Some(simulate_id) = pipeline.simulate_pipeline else {
+        return;
+    };
+    let Some(_) = pipeline_cache.get_compute_pipeline(simulate_id) else {
+        return;
+    };
+
     // Create a temporary buffer for the config uniform
     let mut config_buffer = UniformBuffer::from(config_res.config);
     config_buffer.write_buffer(&render_device, &render_queue);
@@ -285,21 +328,32 @@ impl render_graph::Node for PhysarumNode {
         world: &World,
     ) -> Result<(), render_graph::NodeRunError> {
         let pipeline = world.resource::<PhysarumPipeline>();
-        let Some(bind_group) = world.get_resource::<PhysarumBindGroup>() else { return Ok(()) };
+        let Some(bind_group) = world.get_resource::<PhysarumBindGroup>() else {
+            return Ok(());
+        };
         let pipeline_cache = world.resource::<PipelineCache>();
 
-        let Some(simulate_id) = pipeline.simulate_pipeline else { return Ok(()) };
-        let Some(diffuse_id) = pipeline.diffuse_pipeline else { return Ok(()) };
-        
-        let Some(simulate_pipeline) = pipeline_cache.get_compute_pipeline(simulate_id) else { return Ok(()) };
-        let Some(diffuse_pipeline) = pipeline_cache.get_compute_pipeline(diffuse_id) else { return Ok(()) };
+        let Some(simulate_id) = pipeline.simulate_pipeline else {
+            return Ok(());
+        };
+        let Some(diffuse_id) = pipeline.diffuse_pipeline else {
+            return Ok(());
+        };
 
-        let mut pass = render_context
-            .command_encoder()
-            .begin_compute_pass(&ComputePassDescriptor {
-                label: Some("Physarum Compute Pass"),
-                ..default()
-            });
+        let Some(simulate_pipeline) = pipeline_cache.get_compute_pipeline(simulate_id) else {
+            return Ok(());
+        };
+        let Some(diffuse_pipeline) = pipeline_cache.get_compute_pipeline(diffuse_id) else {
+            return Ok(());
+        };
+
+        let mut pass =
+            render_context
+                .command_encoder()
+                .begin_compute_pass(&ComputePassDescriptor {
+                    label: Some("Physarum Compute Pass"),
+                    ..default()
+                });
 
         pass.set_bind_group(0, &bind_group.0, &[]);
 
