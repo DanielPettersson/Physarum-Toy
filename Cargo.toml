@@ -1,0 +1,21 @@
+[package]
+name = "Physarum-Toy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { version = "0.18.1", features = ["dynamic_linking"] }
+log = { version = "*", features = ["max_level_debug", "release_max_level_warn"] }
+
+# Enable a small amount of optimization in debug mode
+[profile.dev]
+opt-level = 1
+
+# Enable high optimizations for dependencies (including Bevy), but not for our code
+[profile.dev.package."*"]
+opt-level = 3
+
+# Maximize performance in release mode
+[profile.release]
+codegen-units = 1
+lto = "thin"
