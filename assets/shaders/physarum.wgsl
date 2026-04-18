@@ -16,7 +16,7 @@ struct Config {
     height: u32,
     delta_time: f32,
     diffuse_speed: f32,
-    _pad0: f32,
+    active_agents: u32,
     _pad1: f32,
     _pad2: f32,
 }
@@ -58,7 +58,7 @@ fn sense(agent: Agent, sensor_angle_offset: f32) -> f32 {
 @compute @workgroup_size(64)
 fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     let agent_index = id.x;
-    if (agent_index >= arrayLength(&agents)) {
+    if (agent_index >= config.active_agents) {
         return;
     }
     
