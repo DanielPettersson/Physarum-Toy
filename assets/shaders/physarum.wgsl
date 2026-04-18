@@ -40,12 +40,8 @@ fn sense(agent: Agent, sensor_angle_offset: f32) -> f32 {
     let sensor_dir = vec2<f32>(cos(sensor_angle), sin(sensor_angle));
     let sensor_pos = agent.pos + sensor_dir * config.sensor_dist;
     
-    let x = i32(sensor_pos.x);
-    let y = i32(sensor_pos.y);
-    
-    if (x < 0 || x >= i32(config.width) || y < 0 || y >= i32(config.height)) {
-        return 0.0;
-    }
+    let x = (i32(sensor_pos.x) % i32(config.width) + i32(config.width)) % i32(config.width);
+    let y = (i32(sensor_pos.y) % i32(config.height) + i32(config.height)) % i32(config.height);
     
     return textureLoad(trail_map, vec2<i32>(x, y)).r;
 }
@@ -79,15 +75,9 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     let dir = vec2<f32>(cos(agent.angle), sin(agent.angle));
     agent.pos += dir * config.move_speed * config.delta_time;
     
-    // Bounce off walls
-    if (agent.pos.x < 0.0 || agent.pos.x >= f32(config.width)) {
-        agent.pos.x = clamp(agent.pos.x, 0.0, f32(config.width) - 1.0);
-        agent.angle = 3.14159 - agent.angle;
-    }
-    if (agent.pos.y < 0.0 || agent.pos.y >= f32(config.height)) {
-        agent.pos.y = clamp(agent.pos.y, 0.0, f32(config.height) - 1.0);
-        agent.angle = -agent.angle;
-    }
+    // Wrap around boundaries
+    agent.pos.x = fract(agent.pos.x / f32(config.width)) * f32(config.width);
+    agent.pos.y = fract(agent.pos.y / f32(config.height)) * f32(config.height);
     
     agents[agent_index] = agent;
     
@@ -109,8 +99,8 @@ fn diffuse(@builtin(global_invocation_id) id: vec3<u32>) {
     var sum = vec4<f32>(0.0);
     for (var i = -1; i <= 1; i++) {
         for (var j = -1; j <= 1; j++) {
-            let nx = clamp(x + i, 0, i32(config.width) - 1);
-            let ny = clamp(y + j, 0, i32(config.height) - 1);
+            let nx = (x + i + i32(config.width)) % i32(config.width);
+            let ny = (y + j + i32(config.height)) % i32(config.height);
             sum += textureLoad(trail_map, vec2<i32>(nx, ny));
         }
     }

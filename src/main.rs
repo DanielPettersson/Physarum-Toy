@@ -365,7 +365,7 @@ impl render_graph::Node for PhysarumNode {
 
         // Diffuse
         pass.set_pipeline(diffuse_pipeline);
-        pass.dispatch_workgroups(SIZE.0 / 16, SIZE.1 / 16, 1);
+        pass.dispatch_workgroups((SIZE.0 + 15) / 16, (SIZE.1 + 15) / 16, 1);
 
         Ok(())
     }
