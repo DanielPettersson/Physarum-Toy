@@ -20,6 +20,7 @@ use bevy::{
     },
 };
 use bevy::window::WindowResolution;
+use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use bytemuck::{Pod, Zeroable};
 use rand::RngExt;
 
@@ -27,6 +28,13 @@ use rand::RngExt;
 const AGENT_COUNT: u32 = 1_000_000;
 /// The resolution of the simulation and window.
 const SIZE: (u32, u32) = (1920, 1080);
+
+const DEFAULT_SENSOR_ANGLE: f32 = 20.0f32.to_radians();
+const DEFAULT_SENSOR_DIST: f32 = 15.0;
+const DEFAULT_TURN_SPEED: f32 = 550.0f32.to_radians();
+const DEFAULT_MOVE_SPEED: f32 = 50.0;
+const DEFAULT_DECAY: f32 = 1.0;
+const DEFAULT_DIFFUSE_SPEED: f32 = 60.0;
 
 fn main() {
     App::new()
@@ -38,6 +46,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(EguiPlugin::default())
         .add_plugins(FpsOverlayPlugin {
             config: FpsOverlayConfig {
                 text_config: TextFont {
@@ -58,15 +67,15 @@ fn main() {
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(PhysarumConfigResource {
             config: PhysarumConfig {
-                sensor_angle: 0.35,
-                sensor_dist: 15.0,
-                turn_speed: 10.0,
-                move_speed: 50.0,
-                decay: 1., // Ratio of the trail that decays each second (can be above one)
+                sensor_angle: DEFAULT_SENSOR_ANGLE,
+                sensor_dist: DEFAULT_SENSOR_DIST,
+                turn_speed: DEFAULT_TURN_SPEED,
+                move_speed: DEFAULT_MOVE_SPEED,
+                decay: DEFAULT_DECAY,
                 width: SIZE.0,
                 height: SIZE.1,
                 delta_time: 0.0,
-                diffuse_speed: 60.0,
+                diffuse_speed: DEFAULT_DIFFUSE_SPEED,
                 _pad0: 0.0,
                 _pad1: 0.0,
                 _pad2: 0.0,
@@ -74,6 +83,7 @@ fn main() {
         })
         .add_systems(Startup, setup)
         .add_systems(Update, (update_config, move_fps_overlay))
+        .add_systems(EguiPrimaryContextPass, physarum_ui)
         .add_plugins(PhysarumComputePlugin)
         .run();
 }
@@ -208,6 +218,67 @@ fn move_fps_overlay(mut query: Query<(&mut Node, &GlobalZIndex)>) {
             node.left = Val::Px(10.0);
         }
     }
+}
+
+/// System that draws the configuration UI.
+fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfigResource>) {
+    let ctx = match contexts.ctx_mut() {
+        Ok(ctx) => ctx,
+        Err(_) => return,
+    };
+
+    egui::SidePanel::right("config_panel")
+        .default_width(250.0)
+        .show(ctx, |ui| {
+            ui.heading("Physarum Config");
+            ui.add_space(10.0);
+
+            let config = &mut config_res.config;
+
+            ui.label("Sensor Angle (deg)")
+                .on_hover_text("The angle (in degrees) at which the left and right sensors are offset from the agent's forward direction.");
+            let mut sensor_angle_deg = config.sensor_angle.to_degrees();
+            if ui
+                .add(egui::Slider::new(&mut sensor_angle_deg, 0.0..=180.0))
+                .changed()
+            {
+                config.sensor_angle = sensor_angle_deg.to_radians();
+            }
+
+            ui.label("Sensor Distance")
+                .on_hover_text("The distance (in pixels) from the agent to its sensors.");
+            ui.add(egui::Slider::new(&mut config.sensor_dist, 0.0..=100.0));
+
+            ui.label("Turn Speed (deg/s)")
+                .on_hover_text("The speed at which the agent turns towards pheromones (in degrees per second).");
+            let mut turn_speed_deg = config.turn_speed.to_degrees();
+            if ui
+                .add(egui::Slider::new(&mut turn_speed_deg, 0.0..=3600.0))
+                .changed()
+            {
+                config.turn_speed = turn_speed_deg.to_radians();
+            }
+
+            ui.label("Move Speed")
+                .on_hover_text("The speed at which the agent moves forward (in pixels per second).");
+            ui.add(egui::Slider::new(&mut config.move_speed, 0.0..=500.0));
+
+            ui.label("Evaporation Time (s)")
+                .on_hover_text("The number of seconds it takes for a trail to fully evaporate (linear decay).");
+            let mut evap_time = if config.decay > 0.0 { 1.0 / config.decay } else { 10.0 };
+            if ui.add(egui::Slider::new(&mut evap_time, 0.1..=10.0)).changed() {
+                config.decay = 1.0 / evap_time;
+            }
+
+            ui.add_space(20.0);
+            if ui.button("Reset to Defaults").clicked() {
+                config.sensor_angle = DEFAULT_SENSOR_ANGLE;
+                config.sensor_dist = DEFAULT_SENSOR_DIST;
+                config.turn_speed = DEFAULT_TURN_SPEED;
+                config.move_speed = DEFAULT_MOVE_SPEED;
+                config.decay = DEFAULT_DECAY;
+            }
+        });
 }
 
 // --- Compute Infrastructure ---
