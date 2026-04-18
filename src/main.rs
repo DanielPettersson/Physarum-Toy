@@ -13,17 +13,19 @@ use bevy::{
         texture::GpuImage,
     },
 };
+use bevy::window::WindowResolution;
 use bytemuck::{Pod, Zeroable};
 use rand::RngExt;
 
-const AGENT_COUNT: u32 = 200_000;
-const SIZE: (u32, u32) = (1280, 720);
+const AGENT_COUNT: u32 = 1_000_000;
+const SIZE: (u32, u32) = (1920, 1080);
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Physarum Toy".to_string(),
+                resolution: WindowResolution::new(SIZE.0, SIZE.1),
                 ..default()
             }),
             ..default()
