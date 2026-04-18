@@ -33,7 +33,7 @@ const DEFAULT_SENSOR_ANGLE: f32 = 20.0f32.to_radians();
 const DEFAULT_SENSOR_DIST: f32 = 15.0;
 const DEFAULT_TURN_SPEED: f32 = 550.0f32.to_radians();
 const DEFAULT_MOVE_SPEED: f32 = 50.0;
-const DEFAULT_AGENT_COUNT: u32 = 500_000;
+const DEFAULT_AGENT_COUNT: u32 = 1_000_000;
 const DEFAULT_DECAY: f32 = 1.0;
 const DEFAULT_DIFFUSE_SPEED: f32 = 60.0;
 
@@ -243,19 +243,17 @@ fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfig
                     ui.label("Sensor Angle")
                         .on_hover_text("The angle (in degrees) at which the left and right sensors are offset from the agent's forward direction.");
                     let mut sensor_angle_deg = config.sensor_angle.to_degrees();
-                    ui.add_sized(
+                    let slider_res = ui.add_sized(
                         [140.0, 20.0],
                         egui::Slider::new(&mut sensor_angle_deg, 0.0..=180.0).show_value(false),
                     );
-                    if ui
-                        .add_sized(
-                            [60.0, 20.0],
-                            egui::DragValue::new(&mut sensor_angle_deg)
-                                .speed(0.1)
-                                .suffix("°"),
-                        )
-                        .changed()
-                    {
+                    let drag_res = ui.add_sized(
+                        [60.0, 20.0],
+                        egui::DragValue::new(&mut sensor_angle_deg)
+                            .speed(0.1)
+                            .suffix("°"),
+                    );
+                    if slider_res.changed() || drag_res.changed() {
                         config.sensor_angle = sensor_angle_deg.to_radians();
                     }
                     ui.end_row();
@@ -267,26 +265,27 @@ fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfig
                         [140.0, 20.0],
                         egui::Slider::new(&mut config.sensor_dist, 0.0..=100.0).show_value(false),
                     );
-                    ui.add_sized([60.0, 20.0], egui::DragValue::new(&mut config.sensor_dist).speed(0.1));
+                    ui.add_sized(
+                        [60.0, 20.0],
+                        egui::DragValue::new(&mut config.sensor_dist).speed(0.1),
+                    );
                     ui.end_row();
 
                     // Turn Speed
                     ui.label("Turn Speed")
                         .on_hover_text("The speed at which the agent turns towards pheromones (in degrees per second).");
                     let mut turn_speed_deg = config.turn_speed.to_degrees();
-                    ui.add_sized(
+                    let slider_res = ui.add_sized(
                         [140.0, 20.0],
                         egui::Slider::new(&mut turn_speed_deg, 0.0..=3600.0).show_value(false),
                     );
-                    if ui
-                        .add_sized(
-                            [60.0, 20.0],
-                            egui::DragValue::new(&mut turn_speed_deg)
-                                .speed(1.0)
-                                .suffix("°"),
-                        )
-                        .changed()
-                    {
+                    let drag_res = ui.add_sized(
+                        [60.0, 20.0],
+                        egui::DragValue::new(&mut turn_speed_deg)
+                            .speed(1.0)
+                            .suffix("°"),
+                    );
+                    if slider_res.changed() || drag_res.changed() {
                         config.turn_speed = turn_speed_deg.to_radians();
                     }
                     ui.end_row();
@@ -298,7 +297,10 @@ fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfig
                         [140.0, 20.0],
                         egui::Slider::new(&mut config.move_speed, 0.0..=500.0).show_value(false),
                     );
-                    ui.add_sized([60.0, 20.0], egui::DragValue::new(&mut config.move_speed).speed(1.0));
+                    ui.add_sized(
+                        [60.0, 20.0],
+                        egui::DragValue::new(&mut config.move_speed).speed(1.0),
+                    );
                     ui.end_row();
 
                     // Active Agents
@@ -318,19 +320,17 @@ fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfig
                     ui.label("Evap Time")
                         .on_hover_text("The number of seconds it takes for a trail to fully evaporate (linear decay).");
                     let mut evap_time = if config.decay > 0.0 { 1.0 / config.decay } else { 10.0 };
-                    ui.add_sized(
+                    let slider_res = ui.add_sized(
                         [140.0, 20.0],
                         egui::Slider::new(&mut evap_time, 0.1..=10.0).show_value(false),
                     );
-                    if ui
-                        .add_sized(
-                            [60.0, 20.0],
-                            egui::DragValue::new(&mut evap_time)
-                                .speed(0.1)
-                                .suffix("s"),
-                        )
-                        .changed()
-                    {
+                    let drag_res = ui.add_sized(
+                        [60.0, 20.0],
+                        egui::DragValue::new(&mut evap_time)
+                            .speed(0.1)
+                            .suffix("s"),
+                    );
+                    if slider_res.changed() || drag_res.changed() {
                         config.decay = 1.0 / evap_time;
                     }
                     ui.end_row();
