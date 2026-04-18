@@ -54,7 +54,7 @@ fn main() {
                 sensor_dist: 15.0,
                 turn_speed: 10.0,
                 move_speed: 50.0,
-                decay: 0.9,
+                decay: 1., // Ratio of the trail that decays each second (can be above one)
                 width: SIZE.0,
                 height: SIZE.1,
                 delta_time: 0.0,
