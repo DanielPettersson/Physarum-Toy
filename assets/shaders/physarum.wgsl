@@ -63,12 +63,11 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     let v_fwd = sense(agent, 0.0);
     let v_left = sense(agent, config.sensor_angle);
     let v_right = sense(agent, -config.sensor_angle);
-    
-    let random_val = f32(hash(agent_index ^ u32(agent.pos.x * 1000.0) ^ u32(agent.pos.y * 1000.0))) / 4294967295.0;
-    
+        
     if (v_fwd > v_left && v_fwd > v_right) {
         // Continue forward
     } else if (v_fwd < v_left && v_fwd < v_right) {
+        let random_val = f32(hash(agent_index ^ u32(agent.pos.x * 1000.0) ^ u32(agent.pos.y * 1000.0))) / 4294967295.0;
         agent.angle += (random_val - 0.5) * 2.0 * config.turn_speed * config.delta_time;
     } else if (v_left > v_right) {
         agent.angle += config.turn_speed * config.delta_time;
