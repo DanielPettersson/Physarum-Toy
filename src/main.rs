@@ -47,6 +47,7 @@ fn main() {
         })
         .add_plugins(ExtractResourcePlugin::<PhysarumResources>::default())
         .add_plugins(ExtractResourcePlugin::<PhysarumConfigResource>::default())
+        .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(PhysarumConfigResource {
             config: PhysarumConfig {
                 sensor_angle: 0.35,
@@ -112,8 +113,8 @@ fn setup(
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        &[0, 0, 0, 255],
-        TextureFormat::Rgba8Unorm,
+        &[0, 0, 0, 0, 0, 0, 0, 60],
+        TextureFormat::Rgba16Float,
         bevy::asset::RenderAssetUsages::RENDER_WORLD,
     );
     image.texture_descriptor.usage |=
@@ -230,7 +231,7 @@ fn prepare_bind_group(
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::StorageTexture {
                     access: StorageTextureAccess::ReadWrite,
-                    format: TextureFormat::Rgba8Unorm,
+                    format: TextureFormat::Rgba16Float,
                     view_dimension: TextureViewDimension::D2,
                 },
                 count: None,

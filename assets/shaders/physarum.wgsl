@@ -19,7 +19,7 @@ struct Config {
 var<storage, read_write> agents: array<Agent>;
 
 @group(0) @binding(1)
-var trail_map: texture_storage_2d<rgba8unorm, read_write>;
+var trail_map: texture_storage_2d<rgba16float, read_write>;
 
 @group(0) @binding(2)
 var<uniform> config: Config;
@@ -106,7 +106,8 @@ fn diffuse(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     
     let blurred = sum / 9.0;
-    let decayed = blurred * (1.0 - config.decay * config.delta_time);
-    
+    let decay_factor = (1.0 - config.decay * config.delta_time);
+    var decayed = vec4<f32>(blurred.rgb * decay_factor, 1.0);
+        
     textureStore(trail_map, vec2<i32>(x, y), decayed);
 }
