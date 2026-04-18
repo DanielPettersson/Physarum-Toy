@@ -184,23 +184,6 @@ fn setup(
         shader,
     });
 
-    commands.insert_resource(PhysarumConfigResource {
-        config: PhysarumConfig {
-            sensor_angle: 0.35,
-            sensor_dist: 15.0,
-            turn_speed: 10.0,
-            move_speed: 50.0,
-            decay: 1., // Ratio of the trail that decays each second (can be above one)
-            width: SIZE.0,
-            height: SIZE.1,
-            delta_time: 0.0,
-            diffuse_speed: 60.0, // Match old 60fps behavior (100% blur per frame)
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
-        },
-    });
-
     commands.spawn(Camera2d);
 
     // Display the trail map
