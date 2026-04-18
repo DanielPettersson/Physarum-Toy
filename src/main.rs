@@ -1,3 +1,9 @@
+//! # Physarum Toy
+//!
+//! A GPU-accelerated simulation of Physarum polycephalum (slime mold) using Bevy and WGSL compute shaders.
+//! This simulation implements the agent-based model described by Jeff Jones, where simple agents
+//! follow pheromone trails and deposit their own trails, leading to complex emergent patterns.
+
 use bevy::dev_tools::fps_overlay::FrameTimeGraphConfig;
 use bevy::{
     dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin},
@@ -17,7 +23,9 @@ use bevy::window::WindowResolution;
 use bytemuck::{Pod, Zeroable};
 use rand::RngExt;
 
-const AMOEBA_COUNT: u32 = 1_000_000;
+/// The total number of agents in the simulation.
+const AGENT_COUNT: u32 = 1_000_000;
+/// The resolution of the simulation and window.
 const SIZE: (u32, u32) = (1920, 1080);
 
 fn main() {
@@ -66,39 +74,58 @@ fn main() {
         .run();
 }
 
+/// Resources required for the Physarum simulation on the GPU.
 #[derive(Resource, Clone, ExtractResource)]
 struct PhysarumResources {
-    amoebas: Handle<ShaderStorageBuffer>,
+    /// Buffer containing all agent agents.
+    agents: Handle<ShaderStorageBuffer>,
+    /// The trail map texture where pheromones are deposited and sensed.
     trail_map: Handle<Image>,
+    /// The compute shader handle.
     shader: Handle<Shader>,
 }
 
+/// A wrapper resource for the simulation configuration, allowing it to be extracted to the render world.
 #[derive(Resource, ExtractResource, Clone)]
 struct PhysarumConfigResource {
     config: PhysarumConfig,
 }
 
+/// Representation of a single agent.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable, ShaderType)]
-struct Amoeba {
+struct Agent {
+    /// 2D position in the simulation space.
     pos: Vec2,
+    /// Orientation angle in radians.
     angle: f32,
+    /// Padding for GPU alignment.
     _pad: f32,
 }
 
+/// Configuration parameters for the Physarum simulation.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable, ShaderType)]
 struct PhysarumConfig {
+    /// Angle at which the sensors are offset from the agent's forward direction.
     sensor_angle: f32,
+    /// Distance from the agent to its sensors.
     sensor_dist: f32,
+    /// Speed at which the agent turns towards pheromones.
     turn_speed: f32,
+    /// Speed at which the agent moves forward.
     move_speed: f32,
+    /// Rate of pheromone decay over time.
     decay: f32,
+    /// Width of the simulation area.
     width: u32,
+    /// Height of the simulation area.
     height: u32,
+    /// Time elapsed since the last frame.
     delta_time: f32,
 }
 
+/// Initializes the simulation resources, agents, and camera.
 fn setup(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -121,12 +148,12 @@ fn setup(
         TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
     let trail_map_handle = images.add(image);
 
-    // Initialize amoebas
+    // Initialize agents
     let mut rng = rand::rng();
-    let amoebas_data: Vec<Amoeba> = (0..AMOEBA_COUNT)
+    let agents_data: Vec<Agent> = (0..AGENT_COUNT)
         .map(|_| {
             let angle = rng.random_range(0.0..std::f32::consts::TAU);
-            Amoeba {
+            Agent {
                 pos: Vec2::new(
                     rng.random_range(0.0..SIZE.0 as f32),
                     rng.random_range(0.0..SIZE.1 as f32),
@@ -136,11 +163,11 @@ fn setup(
             }
         })
         .collect();
-    let amoebas_buffer = buffers.add(ShaderStorageBuffer::from(amoebas_data));
+    let agents_buffer = buffers.add(ShaderStorageBuffer::from(agents_data));
     let shader = asset_server.load("shaders/physarum.wgsl");
 
     commands.insert_resource(PhysarumResources {
-        amoebas: amoebas_buffer,
+        agents: agents_buffer,
         trail_map: trail_map_handle.clone(),
         shader,
     });
@@ -155,10 +182,12 @@ fn setup(
     });
 }
 
+/// Updates the delta time in the simulation configuration.
 fn update_config(time: Res<Time>, mut config_res: ResMut<PhysarumConfigResource>) {
     config_res.config.delta_time = time.delta_secs();
 }
 
+/// Adjusts the position of the FPS overlay to the bottom-left corner.
 fn move_fps_overlay(mut query: Query<(&mut Node, &GlobalZIndex)>) {
     for (mut node, z_index) in &mut query {
         if z_index.0 == i32::MAX - 32 {
@@ -171,8 +200,10 @@ fn move_fps_overlay(mut query: Query<(&mut Node, &GlobalZIndex)>) {
 
 // --- Compute Infrastructure ---
 
+/// Plugin responsible for setting up the compute shader pipeline and render graph nodes.
 struct PhysarumComputePlugin;
 
+/// Label identifying the Physarum compute node in the render graph.
 #[derive(RenderLabel, Debug, Hash, PartialEq, Eq, Clone)]
 struct PhysarumLabel;
 
@@ -189,16 +220,22 @@ impl Plugin for PhysarumComputePlugin {
     }
 }
 
+/// Holds the compute pipeline IDs and bind group layout for the simulation.
 #[derive(Resource, Default)]
 struct PhysarumPipeline {
+    /// Pipeline for the agent simulation step.
     simulate_pipeline: Option<CachedComputePipelineId>,
+    /// Pipeline for the pheromone diffusion and decay step.
     diffuse_pipeline: Option<CachedComputePipelineId>,
+    /// The common bind group layout used by both pipelines.
     bind_group_layout: Option<BindGroupLayout>,
 }
 
+/// Wrapper for the GPU bind group used in the compute shader.
 #[derive(Resource)]
 struct PhysarumBindGroup(BindGroup);
 
+/// Prepares the bind group and initializes pipelines for the compute shader.
 fn prepare_bind_group(
     mut commands: Commands,
     mut pipeline: ResMut<PhysarumPipeline>,
@@ -285,7 +322,7 @@ fn prepare_bind_group(
     let Some(trail_map) = render_assets.get(&resources.trail_map) else {
         return;
     };
-    let Some(amoebas_buffer) = render_buffers.get(&resources.amoebas) else {
+    let Some(agents_buffer) = render_buffers.get(&resources.agents) else {
         return;
     };
     let Some(simulate_id) = pipeline.simulate_pipeline else {
@@ -305,7 +342,7 @@ fn prepare_bind_group(
         &[
             BindGroupEntry {
                 binding: 0,
-                resource: amoebas_buffer.buffer.as_entire_binding(),
+                resource: agents_buffer.buffer.as_entire_binding(),
             },
             BindGroupEntry {
                 binding: 1,
@@ -321,6 +358,7 @@ fn prepare_bind_group(
     commands.insert_resource(PhysarumBindGroup(bind_group));
 }
 
+/// Render the graph node that executes the Physarum compute shaders.
 struct PhysarumNode;
 
 impl render_graph::Node for PhysarumNode {
@@ -362,7 +400,7 @@ impl render_graph::Node for PhysarumNode {
 
         // Simulate
         pass.set_pipeline(simulate_pipeline);
-        pass.dispatch_workgroups((AMOEBA_COUNT + 63) / 64, 1, 1);
+        pass.dispatch_workgroups((AGENT_COUNT + 63) / 64, 1, 1);
 
         // Diffuse
         pass.set_pipeline(diffuse_pipeline);

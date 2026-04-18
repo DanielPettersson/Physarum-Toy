@@ -2,6 +2,7 @@
 name = "Physarum-Toy"
 version = "0.1.0"
 edition = "2024"
+description = "A GPU-accelerated simulation of Physarum polycephalum (slime mold) using Bevy and WGSL compute shaders."
 
 [dependencies]
 bevy = { version = "0.18.1", features = ["dynamic_linking", "bevy_dev_tools"] }
