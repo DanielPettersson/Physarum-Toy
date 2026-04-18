@@ -17,7 +17,7 @@ use bevy::window::WindowResolution;
 use bytemuck::{Pod, Zeroable};
 use rand::RngExt;
 
-const AGENT_COUNT: u32 = 1_000_000;
+const AMOEBA_COUNT: u32 = 1_000_000;
 const SIZE: (u32, u32) = (1920, 1080);
 
 fn main() {
@@ -68,7 +68,7 @@ fn main() {
 
 #[derive(Resource, Clone, ExtractResource)]
 struct PhysarumResources {
-    agents: Handle<ShaderStorageBuffer>,
+    amoebas: Handle<ShaderStorageBuffer>,
     trail_map: Handle<Image>,
     shader: Handle<Shader>,
 }
@@ -80,7 +80,7 @@ struct PhysarumConfigResource {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable, ShaderType)]
-struct Agent {
+struct Amoeba {
     pos: Vec2,
     angle: f32,
     _pad: f32,
@@ -121,12 +121,12 @@ fn setup(
         TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
     let trail_map_handle = images.add(image);
 
-    // Initialize agents
+    // Initialize amoebas
     let mut rng = rand::rng();
-    let agents_data: Vec<Agent> = (0..AGENT_COUNT)
+    let amoebas_data: Vec<Amoeba> = (0..AMOEBA_COUNT)
         .map(|_| {
             let angle = rng.random_range(0.0..std::f32::consts::TAU);
-            Agent {
+            Amoeba {
                 pos: Vec2::new(
                     rng.random_range(0.0..SIZE.0 as f32),
                     rng.random_range(0.0..SIZE.1 as f32),
@@ -136,11 +136,11 @@ fn setup(
             }
         })
         .collect();
-    let agents_buffer = buffers.add(ShaderStorageBuffer::from(agents_data));
+    let amoebas_buffer = buffers.add(ShaderStorageBuffer::from(amoebas_data));
     let shader = asset_server.load("shaders/physarum.wgsl");
 
     commands.insert_resource(PhysarumResources {
-        agents: agents_buffer,
+        amoebas: amoebas_buffer,
         trail_map: trail_map_handle.clone(),
         shader,
     });
@@ -285,7 +285,7 @@ fn prepare_bind_group(
     let Some(trail_map) = render_assets.get(&resources.trail_map) else {
         return;
     };
-    let Some(agents_buffer) = render_buffers.get(&resources.agents) else {
+    let Some(amoebas_buffer) = render_buffers.get(&resources.amoebas) else {
         return;
     };
     let Some(simulate_id) = pipeline.simulate_pipeline else {
@@ -305,7 +305,7 @@ fn prepare_bind_group(
         &[
             BindGroupEntry {
                 binding: 0,
-                resource: agents_buffer.buffer.as_entire_binding(),
+                resource: amoebas_buffer.buffer.as_entire_binding(),
             },
             BindGroupEntry {
                 binding: 1,
@@ -362,7 +362,7 @@ impl render_graph::Node for PhysarumNode {
 
         // Simulate
         pass.set_pipeline(simulate_pipeline);
-        pass.dispatch_workgroups((AGENT_COUNT + 63) / 64, 1, 1);
+        pass.dispatch_workgroups((AMOEBA_COUNT + 63) / 64, 1, 1);
 
         // Diffuse
         pass.set_pipeline(diffuse_pipeline);
