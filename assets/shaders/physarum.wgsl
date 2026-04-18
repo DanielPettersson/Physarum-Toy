@@ -30,6 +30,9 @@ var trail_map: texture_storage_2d<rgba16float, read_write>;
 @group(0) @binding(2)
 var<uniform> config: Config;
 
+@group(0) @binding(3)
+var normal_map: texture_storage_2d<rgba8unorm, write>;
+
 // Simple pseudo-random function for agent behavior
 fn hash(u: u32) -> u32 {
     var x = u;
@@ -132,4 +135,36 @@ fn diffuse(@builtin(global_invocation_id) id: vec3<u32>) {
     var decayed = vec4<f32>(diffused.rgb * decay_factor, 1.0);
         
     textureStore(trail_map, vec2<i32>(x, y), decayed);
+}
+
+/// Computes a normal map from the trail map (pheromone level) for 3D shading.
+@compute @workgroup_size(16, 16)
+fn calculate_normal(@builtin(global_invocation_id) id: vec3<u32>) {
+    let x = i32(id.x);
+    let y = i32(id.y);
+    
+    if (x >= i32(config.width) || y >= i32(config.height)) {
+        return;
+    }
+    
+    // Sample trail map for finite difference computation
+    let h_c = textureLoad(trail_map, vec2<i32>(x, y)).r;
+    let h_l = textureLoad(trail_map, vec2<i32>((x - 1 + i32(config.width)) % i32(config.width), y)).r;
+    let h_r = textureLoad(trail_map, vec2<i32>((x + 1 + i32(config.width)) % i32(config.width), y)).r;
+    let h_u = textureLoad(trail_map, vec2<i32>(x, (y - 1 + i32(config.height)) % i32(config.height))).r;
+    let h_d = textureLoad(trail_map, vec2<i32>(x, (y + 1 + i32(config.height)) % i32(config.height))).r;
+    
+    // Compute gradient (dx, dy)
+    // Strength scales how prominent the "bumps" appear
+    let strength = 50.0;
+    let dx = (h_r - h_l) * strength;
+    let dy = (h_u - h_d) * strength;
+    
+    // The normal to a heightmap (x, y, h(x,y)) is normalize(vec3(-dh/dx, -dh/dy, 1.0))
+    let n = normalize(vec3(-dx, -dy, 1.0));
+    
+    // Map normal from [-1, 1] to [0, 1] for storage in Rgba8Unorm
+    let pack_n = n * 0.5 + 0.5;
+    
+    textureStore(normal_map, vec2<i32>(x, y), vec4<f32>(pack_n, 1.0));
 }
