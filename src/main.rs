@@ -30,7 +30,7 @@ const MAX_AGENT_COUNT: u32 = 2_000_000;
 const SIZE: (u32, u32) = (1920, 1080);
 
 const DEFAULT_SENSOR_ANGLE: f32 = 20.0f32.to_radians();
-const DEFAULT_SENSOR_DIST: f32 = 25.0;
+const DEFAULT_SENSOR_DIST: f32 = 15.0;
 const DEFAULT_TURN_SPEED: f32 = 550.0f32.to_radians();
 const DEFAULT_MOVE_SPEED: f32 = 50.0;
 const DEFAULT_AGENT_COUNT: u32 = 1_000_000;
@@ -83,7 +83,7 @@ fn main() {
             },
         })
         .add_systems(Startup, setup)
-        .add_systems(Update, (update_config, move_fps_overlay, update_mouse_light))
+        .add_systems(Update, (update_config, move_fps_overlay))
         .add_systems(EguiPrimaryContextPass, physarum_ui)
         .add_plugins(PhysarumComputePlugin)
         .run();
@@ -96,8 +96,6 @@ struct PhysarumResources {
     agents: Handle<ShaderStorageBuffer>,
     /// The trail map texture where pheromones are deposited and sensed.
     trail_map: Handle<Image>,
-    /// The normal map texture generated from the trail map for shading.
-    normal_map: Handle<Image>,
     /// The compute shader handle.
     shader: Handle<Shader>,
 }
@@ -107,10 +105,6 @@ struct PhysarumResources {
 struct PhysarumConfigResource {
     config: PhysarumConfig,
 }
-
-/// Marker component for the light that follows the mouse.
-#[derive(Component)]
-struct MouseLight;
 
 /// Representation of a single agent.
 #[repr(C)]
@@ -159,8 +153,6 @@ fn setup(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
 ) {
     // Create trail map image
@@ -178,22 +170,6 @@ fn setup(
     image.texture_descriptor.usage |=
         TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
     let trail_map_handle = images.add(image);
-
-    // Create normal map image
-    let mut normal_image = Image::new_fill(
-        Extent3d {
-            width: SIZE.0,
-            height: SIZE.1,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        &[127, 127, 255, 255],
-        TextureFormat::Rgba8Unorm,
-        bevy::asset::RenderAssetUsages::RENDER_WORLD,
-    );
-    normal_image.texture_descriptor.usage |=
-        TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
-    let normal_map_handle = images.add(normal_image);
 
     // Initialize agents
     let mut rng = rand::rng();
@@ -216,49 +192,17 @@ fn setup(
     commands.insert_resource(PhysarumResources {
         agents: agents_buffer,
         trail_map: trail_map_handle.clone(),
-        normal_map: normal_map_handle.clone(),
         shader,
     });
 
-    // Spawn 3D Camera positioned directly above the simulation
-    commands.spawn((
-        Camera3d::default(),
-        AmbientLight {
-            ..default()
-        },
-        Transform::from_xyz(SIZE.0 as f32 / 2.0, SIZE.1 as f32 / 2.0, 1000.0)
-            .looking_at(Vec3::new(SIZE.0 as f32 / 2.0, SIZE.1 as f32 / 2.0, 0.0), Vec3::Y),
-    ));
+    commands.spawn(Camera2d);
 
-    // Add lighting to emphasize the normal mapped "bumps"
-    commands.spawn((
-        PointLight {
-            intensity: 50_000_000.0,
-            range: 3000.0,
-            shadows_enabled: false,
-            ..default()
-        },
-        Transform::from_xyz(SIZE.0 as f32 / 2.0, SIZE.1 as f32 / 2.0, 50.0),
-        MouseLight,
-    ));
-
-    // Display the trail map on a 3D Mesh with normal mapping
-    commands.spawn((
-        Mesh3d(meshes.add(
-            Mesh::from(Rectangle::new(SIZE.0 as f32, SIZE.1 as f32))
-                .with_generated_tangents()
-                .expect("Failed to generate tangents"),
-        )),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color_texture: Some(trail_map_handle),
-            normal_map_texture: Some(normal_map_handle),
-            metallic: 0.1,
-            perceptual_roughness: 0.4,
-            reflectance: 0.2,
-            ..default()
-        })),
-        Transform::from_xyz(SIZE.0 as f32 / 2.0, SIZE.1 as f32 / 2.0, 0.0),
-    ));
+    // Display the trail map
+    commands.spawn(Sprite {
+        image: trail_map_handle,
+        custom_size: Some(Vec2::new(SIZE.0 as f32, SIZE.1 as f32)),
+        ..default()
+    });
 }
 
 /// Updates the delta time in the simulation configuration.
@@ -404,40 +348,6 @@ fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfig
         });
 }
 
-/// Updates the position of the point light to follow the mouse cursor.
-fn update_mouse_light(
-    window_query: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform)>,
-    mut light_query: Query<&mut Transform, With<MouseLight>>,
-) {
-    let window = match window_query.single() {
-        Ok(w) => w,
-        Err(_) => return,
-    };
-    let (camera, camera_transform) = match camera_query.single() {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    let mut light_transform = match light_query.single_mut() {
-        Ok(l) => l,
-        Err(_) => return,
-    };
-
-    if let Some(cursor_pos) = window.cursor_position() {
-        // Convert cursor position to a ray in world space
-        if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
-            // Calculate intersection with the Z=0 plane: O.z + t * D.z = 0 => t = -O.z / D.z
-            let t = -ray.origin.z / ray.direction.z;
-            let intersection = ray.origin + *ray.direction * t;
-            
-            // Move the light to the intersection point, slightly above the surface
-            light_transform.translation.x = intersection.x;
-            light_transform.translation.y = intersection.y;
-            light_transform.translation.z = 50.0;
-        }
-    }
-}
-
 // --- Compute Infrastructure ---
 
 /// Plugin responsible for setting up the compute shader pipeline and render graph nodes.
@@ -467,8 +377,6 @@ struct PhysarumPipeline {
     simulate_pipeline: Option<CachedComputePipelineId>,
     /// Pipeline for the pheromone diffusion and decay step.
     diffuse_pipeline: Option<CachedComputePipelineId>,
-    /// Pipeline for generating the normal map.
-    calculate_normal_pipeline: Option<CachedComputePipelineId>,
     /// The common bind group layout used by both pipelines.
     bind_group_layout: Option<BindGroupLayout>,
 }
@@ -525,16 +433,6 @@ fn prepare_bind_group(
                 },
                 count: None,
             },
-            BindGroupLayoutEntry {
-                binding: 3,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::StorageTexture {
-                    access: StorageTextureAccess::WriteOnly,
-                    format: TextureFormat::Rgba8Unorm,
-                    view_dimension: TextureViewDimension::D2,
-                },
-                count: None,
-            },
         ];
 
         let layout_descriptor = BindGroupLayoutDescriptor {
@@ -559,7 +457,7 @@ fn prepare_bind_group(
         pipeline.diffuse_pipeline = Some(pipeline_cache.queue_compute_pipeline(
             ComputePipelineDescriptor {
                 label: Some("physarum_diffuse_pipeline".into()),
-                layout: vec![layout_descriptor.clone()],
+                layout: vec![layout_descriptor],
                 push_constant_ranges: vec![],
                 shader: resources.shader.clone(),
                 shader_defs: vec![],
@@ -568,25 +466,10 @@ fn prepare_bind_group(
             },
         ));
 
-        pipeline.calculate_normal_pipeline = Some(pipeline_cache.queue_compute_pipeline(
-            ComputePipelineDescriptor {
-                label: Some("physarum_calculate_normal_pipeline".into()),
-                layout: vec![layout_descriptor],
-                push_constant_ranges: vec![],
-                shader: resources.shader.clone(),
-                shader_defs: vec![],
-                entry_point: Some("calculate_normal".into()),
-                zero_initialize_workgroup_memory: false,
-            },
-        ));
-
         pipeline.bind_group_layout = Some(layout);
     }
 
     let Some(trail_map) = render_assets.get(&resources.trail_map) else {
-        return;
-    };
-    let Some(normal_map) = render_assets.get(&resources.normal_map) else {
         return;
     };
     let Some(agents_buffer) = render_buffers.get(&resources.agents) else {
@@ -618,10 +501,6 @@ fn prepare_bind_group(
             BindGroupEntry {
                 binding: 2,
                 resource: config_buffer.buffer().unwrap().as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 3,
-                resource: BindingResource::TextureView(&normal_map.texture_view),
             },
         ],
     );
@@ -658,12 +537,6 @@ impl render_graph::Node for PhysarumNode {
         let Some(diffuse_pipeline) = pipeline_cache.get_compute_pipeline(diffuse_id) else {
             return Ok(());
         };
-        let Some(calculate_normal_id) = pipeline.calculate_normal_pipeline else {
-            return Ok(());
-        };
-        let Some(calculate_normal_pipeline) = pipeline_cache.get_compute_pipeline(calculate_normal_id) else {
-            return Ok(());
-        };
 
         let mut pass =
             render_context
@@ -685,11 +558,6 @@ impl render_graph::Node for PhysarumNode {
         pass.set_pipeline(diffuse_pipeline);
         pass.dispatch_workgroups((SIZE.0 + 15) / 16, (SIZE.1 + 15) / 16, 1);
 
-        // Calculate Normal
-        pass.set_pipeline(calculate_normal_pipeline);
-        pass.dispatch_workgroups((SIZE.0 + 15) / 16, (SIZE.1 + 15) / 16, 1);
-
         Ok(())
     }
 }
-
