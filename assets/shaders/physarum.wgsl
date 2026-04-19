@@ -1,9 +1,10 @@
-// Physarum simulation compute shader
+// Physarum simulation compute shader with food, health, and mitosis
+// Separated logic and display for maximum stability
 
 struct Agent {
     pos: vec2<f32>,
     angle: f32,
-    _pad: f32,
+    health: f32,
 }
 
 struct Config {
@@ -17,17 +18,38 @@ struct Config {
     delta_time: f32,
     diffuse_speed: f32,
     active_agents: u32,
+    food_attraction: f32,
+    food_depletion_rate: f32,
+    health_decay_rate: f32,
+    food_health_gain: f32,
+    show_food: f32,
     _pad1: f32,
-    _pad2: f32,
+}
+
+struct SpawnData {
+    count: atomic<u32>,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
+    indices: array<u32>,
 }
 
 @group(0) @binding(0)
 var<storage, read_write> agents: array<Agent>;
 
 @group(0) @binding(1)
-var trail_map: texture_storage_2d<rgba16float, read_write>;
+var trail_map: texture_storage_2d<rgba16float, read_write>; // Pure pheromone map
 
 @group(0) @binding(2)
+var food_map: texture_storage_2d<r32float, read_write>; // Pure food map
+
+@group(0) @binding(3)
+var<storage, read_write> spawn_data: SpawnData;
+
+@group(0) @binding(4)
+var display_map: texture_storage_2d<rgba8unorm, read_write>; // Composite for display only
+
+@group(0) @binding(5)
 var<uniform> config: Config;
 
 // Simple pseudo-random function for agent behavior
@@ -41,39 +63,39 @@ fn hash(u: u32) -> u32 {
     return x;
 }
 
-// Senses the pheromone level at a specific angle relative to the agent's current orientation
-fn sense(agent: Agent, sensor_angle_offset: f32) -> f32 {
-    let sensor_angle = agent.angle + sensor_angle_offset;
+// Senses combined pheromone and food levels
+fn sense(pos: vec2<f32>, sensor_angle: f32) -> f32 {
     let sensor_dir = vec2<f32>(cos(sensor_angle), sin(sensor_angle));
-    let sensor_pos = agent.pos + sensor_dir * config.sensor_dist;
+    let sensor_pos = pos + sensor_dir * config.sensor_dist;
     
     // Boundary wrap for sensing
     let x = (i32(sensor_pos.x) % i32(config.width) + i32(config.width)) % i32(config.width);
     let y = (i32(sensor_pos.y) % i32(config.height) + i32(config.height)) % i32(config.height);
     
-    return textureLoad(trail_map, vec2<i32>(x, y)).r;
+    let pheromone = textureLoad(trail_map, vec2<i32>(x, y)).r;
+    let food = textureLoad(food_map, vec2<i32>(x, y)).r;
+    
+    return pheromone + food * config.food_attraction;
 }
 
-/// Agent simulation step: Senses pheromones, turns, moves, and deposits trail.
+/// Agent simulation step: Senses pheromones/food, turns, moves, eats, and manages lifecycle.
 @compute @workgroup_size(64)
 fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     let agent_index = id.x;
-    if (agent_index >= config.active_agents) {
+    var agent = agents[agent_index];
+    if (agent.health <= 0.0) {
         return;
     }
     
-    var agent = agents[agent_index];
-    
-    // Sense pheromones in three directions: forward, left, and right
-    let v_fwd = sense(agent, 0.0);
-    let v_left = sense(agent, config.sensor_angle);
-    let v_right = sense(agent, -config.sensor_angle);
+    // Sense pheromones and food in three directions: forward, left, and right
+    let v_fwd = sense(agent.pos, agent.angle);
+    let v_left = sense(agent.pos, agent.angle + config.sensor_angle);
+    let v_right = sense(agent.pos, agent.angle - config.sensor_angle);
         
     if (v_fwd > v_left && v_fwd > v_right) {
         // Continue forward if strongest trail is ahead
     } else if (v_fwd < v_left && v_fwd < v_right) {
         // Turn randomly if forward is weaker than both sides.
-        // Brownian motion scaling: sqrt(dt / reference_dt) where reference_dt is 1/60s.
         let random_val = f32(hash(agent_index ^ u32(agent.pos.x * 1000.0) ^ u32(agent.pos.y * 1000.0))) / 4294967295.0;
         agent.angle += (random_val - 0.5) * 2.0 * config.turn_speed * sqrt(max(config.delta_time, 0.0001) / 60.0);
     } else if (v_left > v_right) {
@@ -92,15 +114,59 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     agent.pos.x = fract(agent.pos.x / f32(config.width)) * f32(config.width);
     agent.pos.y = fract(agent.pos.y / f32(config.height)) * f32(config.height);
     
+    // Eating and health mechanics
+    let ix = i32(agent.pos.x);
+    let iy = i32(agent.pos.y);
+    let food_val = textureLoad(food_map, vec2<i32>(ix, iy)).r;
+    
+    if (food_val > 0.0) {
+        let consume = min(food_val, config.food_depletion_rate * config.delta_time);
+        textureStore(food_map, vec2<i32>(ix, iy), vec4<f32>(food_val - consume, 0.0, 0.0, 0.0));
+        agent.health += consume * config.food_health_gain;
+    } else {
+        agent.health -= config.health_decay_rate * config.delta_time;
+    }
+    
+    // Lifecycle: Mitosis and Death
+    if (agent.health <= 0.0) {
+        // Death: Add index to dead list
+        agent.health = 0.0;
+        let old_count = atomicAdd(&spawn_data.count, 1u);
+        if (old_count < arrayLength(&spawn_data.indices)) {
+            spawn_data.indices[old_count] = agent_index;
+        }
+    } else if (agent.health >= 1.0) {
+        // Mitosis: Try to spawn a child
+        var popped = false;
+        var child_index = 0u;
+        loop {
+            let count = atomicLoad(&spawn_data.count);
+            if (count == 0u) { break; }
+            let res = atomicCompareExchangeWeak(&spawn_data.count, count, count - 1u);
+            if (res.exchanged) {
+                child_index = spawn_data.indices[count - 1u];
+                popped = true;
+                break;
+            }
+        }
+        
+        if (popped) {
+            agent.health = 0.5;
+            var child = agent;
+            child.angle += 3.14159 * 0.5; 
+            agents[child_index] = child;
+        }
+    }
+    
     agents[agent_index] = agent;
     
-    // Deposit trail at new position
-    let x = i32(agent.pos.x);
-    let y = i32(agent.pos.y);
-    textureStore(trail_map, vec2<i32>(x, y), vec4<f32>(1.0, 1.0, 1.0, 1.0));
+    // Deposit trail if alive, proportional to health
+    if (agent.health > 0.0) {
+        textureStore(trail_map, vec2<i32>(ix, iy), vec4<f32>(agent.health, 0.0, 0.0, 1.0));
+    }
 }
 
-/// Pheromone diffusion and decay step: Spreads trails and reduces intensity over time.
+/// Pheromone diffusion and display compositing.
 @compute @workgroup_size(16, 16)
 fn diffuse(@builtin(global_invocation_id) id: vec3<u32>) {
     let x = i32(id.x);
@@ -110,26 +176,31 @@ fn diffuse(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     
-    // Average values in 3x3 neighborhood (Box Blur)
-    var sum = vec4<f32>(0.0);
+    // Blur pure pheromone (R channel)
+    var sum = 0.0;
     for (var i = -1; i <= 1; i++) {
         for (var j = -1; j <= 1; j++) {
             let nx = (x + i + i32(config.width)) % i32(config.width);
             let ny = (y + j + i32(config.height)) % i32(config.height);
-            sum += textureLoad(trail_map, vec2<i32>(nx, ny));
+            sum += textureLoad(trail_map, vec2<i32>(nx, ny)).r;
         }
     }
     
     let blurred = sum / 9.0;
-    
-    // Time-dependent diffusion: Mix original pixel with blurred pixel based on speed and delta_time
-    let original = textureLoad(trail_map, vec2<i32>(x, y));
+    let original = textureLoad(trail_map, vec2<i32>(x, y)).r;
     let mix_factor = clamp(config.diffuse_speed * config.delta_time, 0.0, 1.0);
     let diffused = mix(original, blurred, mix_factor);
 
-    // Apply decay (clamped to avoid negative colors at very low framerates)
+    // Apply decay to pure pheromone
     let decay_factor = max(0.0, 1.0 - config.decay * config.delta_time);
-    var decayed = vec4<f32>(diffused.rgb * decay_factor, 1.0);
+    let pheromone = diffused * decay_factor;
+    
+    // Write pure pheromone back to trail_map
+    textureStore(trail_map, vec2<i32>(x, y), vec4<f32>(pheromone, 0.0, 0.0, 1.0));
+    
+    // Composite for display
+    let food = textureLoad(food_map, vec2<i32>(x, y)).r * config.show_food;
+    let final_color = vec4<f32>(pheromone + food, food, food, 1.0);
         
-    textureStore(trail_map, vec2<i32>(x, y), decayed);
+    textureStore(display_map, vec2<i32>(x, y), final_color);
 }

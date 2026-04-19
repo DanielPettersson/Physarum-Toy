@@ -29,13 +29,18 @@ const MAX_AGENT_COUNT: u32 = 2_000_000;
 /// The resolution of the simulation and window.
 const SIZE: (u32, u32) = (1920, 1080);
 
-const DEFAULT_SENSOR_ANGLE: f32 = 20.0f32.to_radians();
-const DEFAULT_SENSOR_DIST: f32 = 15.0;
+const DEFAULT_SENSOR_ANGLE: f32 = 45.0f32.to_radians();
+const DEFAULT_SENSOR_DIST: f32 = 25.0;
 const DEFAULT_TURN_SPEED: f32 = 550.0f32.to_radians();
 const DEFAULT_MOVE_SPEED: f32 = 50.0;
-const DEFAULT_AGENT_COUNT: u32 = 1_000_000;
-const DEFAULT_DECAY: f32 = 1.0;
+const DEFAULT_AGENT_COUNT: u32 = 10000;
+const DEFAULT_DECAY: f32 = 2.0;
 const DEFAULT_DIFFUSE_SPEED: f32 = 60.0;
+
+const DEFAULT_FOOD_ATTRACTION: f32 = 5.0;
+const DEFAULT_FOOD_DEPLETION_RATE: f32 = 0.5;
+const DEFAULT_HEALTH_DECAY_RATE: f32 = 0.1;
+const DEFAULT_FOOD_HEALTH_GAIN: f32 = 0.2;
 
 fn main() {
     App::new()
@@ -78,12 +83,17 @@ fn main() {
                 delta_time: 0.0,
                 diffuse_speed: DEFAULT_DIFFUSE_SPEED,
                 active_agents: DEFAULT_AGENT_COUNT,
+                food_attraction: DEFAULT_FOOD_ATTRACTION,
+                food_depletion_rate: DEFAULT_FOOD_DEPLETION_RATE,
+                health_decay_rate: DEFAULT_HEALTH_DECAY_RATE,
+                food_health_gain: DEFAULT_FOOD_HEALTH_GAIN,
+                show_food: 1.0,
                 _pad1: 0.0,
-                _pad2: 0.0,
             },
         })
+        .insert_resource(ResetCommand(None))
         .add_systems(Startup, setup)
-        .add_systems(Update, (update_config, move_fps_overlay))
+        .add_systems(Update, (update_config, move_fps_overlay, reset_simulation))
         .add_systems(EguiPrimaryContextPass, physarum_ui)
         .add_plugins(PhysarumComputePlugin)
         .run();
@@ -94,8 +104,14 @@ fn main() {
 struct PhysarumResources {
     /// Buffer containing all agent agents.
     agents: Handle<ShaderStorageBuffer>,
-    /// The trail map texture where pheromones are deposited and sensed.
+    /// The trail map texture where pure pheromones are deposited.
     trail_map: Handle<Image>,
+    /// The food map texture.
+    food_map: Handle<Image>,
+    /// The final display texture (composite of trail and food).
+    display_map: Handle<Image>,
+    /// Buffer for managing agent spawns and deaths (dead list).
+    spawn_data: Handle<ShaderStorageBuffer>,
     /// The compute shader handle.
     shader: Handle<Shader>,
 }
@@ -114,8 +130,8 @@ struct Agent {
     pos: Vec2,
     /// Orientation angle in radians.
     angle: f32,
-    /// Padding for GPU alignment.
-    _pad: f32,
+    /// Health level (0.0 = dead, 1.0 = mitosis).
+    health: f32,
 }
 
 /// Configuration parameters for the Physarum simulation.
@@ -140,12 +156,20 @@ struct PhysarumConfig {
     delta_time: f32,
     /// Speed of pheromone diffusion.
     diffuse_speed: f32,
-    /// The number of agents to simulate.
+    /// The number of initial agents to simulate.
     active_agents: u32,
-    /// Padding for WebGPU 16-byte uniform alignment (size must be multiple of 16).
+    /// Weight of food attraction compared to pheromones.
+    food_attraction: f32,
+    /// Rate at which food is consumed per second.
+    food_depletion_rate: f32,
+    /// Rate at which health decreases per second.
+    health_decay_rate: f32,
+    /// How much health is gained per unit of food consumed.
+    food_health_gain: f32,
+    /// Whether to display food in the visualization (1.0 = true, 0.0 = false).
+    show_food: f32,
+    /// Padding for WebGPU 16-byte uniform alignment.
     _pad1: f32,
-    /// Padding for WebGPU 16-byte uniform alignment (size must be multiple of 16).
-    _pad2: f32,
 }
 
 /// Initializes the simulation resources, agents, and camera.
@@ -156,7 +180,7 @@ fn setup(
     asset_server: Res<AssetServer>,
 ) {
     // Create trail map image
-    let mut image = Image::new_fill(
+    let mut trail_image = Image::new_fill(
         Extent3d {
             width: SIZE.0,
             height: SIZE.1,
@@ -167,39 +191,108 @@ fn setup(
         TextureFormat::Rgba16Float,
         bevy::asset::RenderAssetUsages::RENDER_WORLD,
     );
-    image.texture_descriptor.usage |=
+    trail_image.texture_descriptor.usage |=
         TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
-    let trail_map_handle = images.add(image);
+    let trail_map_handle = images.add(trail_image);
+
+    // Create food map image
+    let mut food_data = vec![0.0f32; (SIZE.0 * SIZE.1) as usize];
+    let center = Vec2::new(SIZE.0 as f32 / 2.0, SIZE.1 as f32 / 2.0);
+    let radius = 200.0;
+    for y in 0..SIZE.1 {
+        for x in 0..SIZE.0 {
+            let pos = Vec2::new(x as f32, y as f32);
+            if pos.distance(center) < radius {
+                food_data[(y * SIZE.0 + x) as usize] = 1.0;
+            }
+        }
+    }
+    let mut food_image = Image::new(
+        Extent3d {
+            width: SIZE.0,
+            height: SIZE.1,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        bytemuck::cast_slice(&food_data).to_vec(),
+        TextureFormat::R32Float,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    );
+    food_image.texture_descriptor.usage |=
+        TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
+    let food_map_handle = images.add(food_image);
+
+    // Create display map image
+    let mut display_image = Image::new_fill(
+        Extent3d {
+            width: SIZE.0,
+            height: SIZE.1,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &[0, 0, 0, 0],
+        TextureFormat::Rgba8Unorm,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    );
+    display_image.texture_descriptor.usage |=
+        TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
+    let display_map_handle = images.add(display_image);
 
     // Initialize agents
     let mut rng = rand::rng();
     let agents_data: Vec<Agent> = (0..MAX_AGENT_COUNT)
-        .map(|_| {
-            let angle = rng.random_range(0.0..std::f32::consts::TAU);
-            Agent {
-                pos: Vec2::new(
-                    rng.random_range(0.0..SIZE.0 as f32),
-                    rng.random_range(0.0..SIZE.1 as f32),
-                ),
-                angle,
-                _pad: 0.0,
+        .map(|i| {
+            if i < DEFAULT_AGENT_COUNT {
+                let angle = rng.random_range(0.0..std::f32::consts::TAU);
+                // Place agents in a small circle at the center of the food source
+                let offset_dist = rng.random_range(0.0..50.0);
+                let offset_angle = rng.random_range(0.0..std::f32::consts::TAU);
+                let pos = center + Vec2::new(
+                    offset_angle.cos() * offset_dist,
+                    offset_angle.sin() * offset_dist,
+                );
+                Agent {
+                    pos,
+                    angle,
+                    health: 0.5,
+                }
+            } else {
+                Agent {
+                    pos: Vec2::ZERO,
+                    angle: 0.0,
+                    health: 0.0,
+                }
             }
         })
         .collect();
     let agents_buffer = buffers.add(ShaderStorageBuffer::from(agents_data));
+
+    // Initialize spawn data (dead list) using a Vec to avoid stack overflow.
+    // The buffer layout matches the SpawnData struct in WGSL:
+    // [count (u32), pad1, pad2, pad3, indices (u32 * MAX_AGENT_COUNT)]
+    let mut spawn_vec = vec![0u32; 4 + MAX_AGENT_COUNT as usize];
+    spawn_vec[0] = MAX_AGENT_COUNT - DEFAULT_AGENT_COUNT; // count
+    for i in 0..(MAX_AGENT_COUNT - DEFAULT_AGENT_COUNT) {
+        spawn_vec[4 + i as usize] = DEFAULT_AGENT_COUNT + i;
+    }
+    let spawn_buffer = buffers.add(ShaderStorageBuffer::from(spawn_vec));
+
     let shader = asset_server.load("shaders/physarum.wgsl");
 
     commands.insert_resource(PhysarumResources {
         agents: agents_buffer,
         trail_map: trail_map_handle.clone(),
+        food_map: food_map_handle,
+        display_map: display_map_handle.clone(),
+        spawn_data: spawn_buffer,
         shader,
     });
 
     commands.spawn(Camera2d);
 
-    // Display the trail map
+    // Display the final composited image
     commands.spawn(Sprite {
-        image: trail_map_handle,
+        image: display_map_handle,
         custom_size: Some(Vec2::new(SIZE.0 as f32, SIZE.1 as f32)),
         ..default()
     });
@@ -222,7 +315,11 @@ fn move_fps_overlay(mut query: Query<(&mut Node, &GlobalZIndex)>) {
 }
 
 /// System that draws the configuration UI.
-fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfigResource>) {
+fn physarum_ui(
+    mut contexts: EguiContexts,
+    mut config_res: ResMut<PhysarumConfigResource>,
+    mut commands: Commands,
+) {
     let ctx = match contexts.ctx_mut() {
         Ok(ctx) => ctx,
         Err(_) => return,
@@ -303,16 +400,16 @@ fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfig
                     );
                     ui.end_row();
 
-                    // Active Agents
-                    ui.label("Agents")
-                        .on_hover_text("The number of agents to simulate (up to the maximum capacity).");
+                    // Starting Agents
+                    ui.label("Start Agents")
+                        .on_hover_text("The number of agents to spawn when the simulation is reset.");
                     ui.add_sized(
                         [140.0, 20.0],
-                        egui::Slider::new(&mut config.active_agents, 0..=MAX_AGENT_COUNT).show_value(false),
+                        egui::Slider::new(&mut config.active_agents, 1..=MAX_AGENT_COUNT).show_value(false),
                     );
                     ui.add_sized(
                         [60.0, 20.0],
-                        egui::DragValue::new(&mut config.active_agents).speed(1000.0),
+                        egui::DragValue::new(&mut config.active_agents).speed(100.0),
                     );
                     ui.end_row();
 
@@ -334,18 +431,186 @@ fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfig
                         config.decay = 1.0 / evap_time;
                     }
                     ui.end_row();
+
+                    // Food Attraction
+                    ui.label("Food Attract")
+                        .on_hover_text("Weight of food attraction compared to pheromones.");
+                    ui.add_sized(
+                        [140.0, 20.0],
+                        egui::Slider::new(&mut config.food_attraction, 0.0..=10.0).show_value(false),
+                    );
+                    ui.add_sized(
+                        [60.0, 20.0],
+                        egui::DragValue::new(&mut config.food_attraction).speed(0.1),
+                    );
+                    ui.end_row();
+
+                    // Food Depletion Rate
+                    ui.label("Food Consume")
+                        .on_hover_text("Rate at which food is consumed by agents.");
+                    ui.add_sized(
+                        [140.0, 20.0],
+                        egui::Slider::new(&mut config.food_depletion_rate, 0.0..=5.0).show_value(false),
+                    );
+                    ui.add_sized(
+                        [60.0, 20.0],
+                        egui::DragValue::new(&mut config.food_depletion_rate).speed(0.01),
+                    );
+                    ui.end_row();
+
+                    // Health Decay
+                    ui.label("Health Decay")
+                        .on_hover_text("Rate at which health decreases over time.");
+                    ui.add_sized(
+                        [140.0, 20.0],
+                        egui::Slider::new(&mut config.health_decay_rate, 0.0..=1.0).show_value(false),
+                    );
+                    ui.add_sized(
+                        [60.0, 20.0],
+                        egui::DragValue::new(&mut config.health_decay_rate).speed(0.01),
+                    );
+                    ui.end_row();
+
+                    // Food Health Gain
+                    ui.label("Food Gain")
+                        .on_hover_text("How much health is gained per unit of food consumed.");
+                    ui.add_sized(
+                        [140.0, 20.0],
+                        egui::Slider::new(&mut config.food_health_gain, 0.0..=2.0).show_value(false),
+                    );
+                    ui.add_sized(
+                        [60.0, 20.0],
+                        egui::DragValue::new(&mut config.food_health_gain).speed(0.01),
+                    );
+                    ui.end_row();
+
+                    // Show Food Toggle
+                    ui.label("Show Food")
+                        .on_hover_text("Whether to display food in the visualization.");
+                    let mut show_food_bool = config.show_food > 0.5;
+                    if ui.checkbox(&mut show_food_bool, "").changed() {
+                        config.show_food = if show_food_bool { 1.0 } else { 0.0 };
+                    }
+                    ui.end_row();
                 });
 
             ui.add_space(20.0);
-            if ui.button("Reset to Defaults").clicked() {
+            if ui.button("Reset Simulation").clicked() {
+                commands.insert_resource(ResetCommand(Some(PhysarumCommand::Reset)));
+            }
+            if ui.button("Reset Config to Defaults").clicked() {
                 config.sensor_angle = DEFAULT_SENSOR_ANGLE;
                 config.sensor_dist = DEFAULT_SENSOR_DIST;
                 config.turn_speed = DEFAULT_TURN_SPEED;
                 config.move_speed = DEFAULT_MOVE_SPEED;
                 config.decay = DEFAULT_DECAY;
-                config.active_agents =DEFAULT_AGENT_COUNT;
+                config.active_agents = DEFAULT_AGENT_COUNT;
+                config.food_attraction = DEFAULT_FOOD_ATTRACTION;
+                config.food_depletion_rate = DEFAULT_FOOD_DEPLETION_RATE;
+                config.health_decay_rate = DEFAULT_HEALTH_DECAY_RATE;
+                config.food_health_gain = DEFAULT_FOOD_HEALTH_GAIN;
+                config.show_food = 1.0;
             }
         });
+}
+
+/// Commands sent from the UI to the simulation.
+#[derive(Resource, PartialEq, Eq, Clone, Copy)]
+struct ResetCommand(Option<PhysarumCommand>);
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum PhysarumCommand {
+    Reset,
+}
+
+/// System that handles the reset command, re-initializing the food map and agents.
+fn reset_simulation(
+    mut command: ResMut<ResetCommand>,
+    mut images: ResMut<Assets<Image>>,
+    mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
+    resources: Res<PhysarumResources>,
+    config_res: Res<PhysarumConfigResource>,
+) {
+    if command.0 != Some(PhysarumCommand::Reset) {
+        return;
+    }
+    command.0 = None;
+
+    let config = &config_res.config;
+
+    // Reset Food Map
+    let mut food_data = vec![0.0f32; (SIZE.0 * SIZE.1) as usize];
+    let center = Vec2::new(SIZE.0 as f32 / 2.0, SIZE.1 as f32 / 2.0);
+    let radius = 200.0;
+    for y in 0..SIZE.1 {
+        for x in 0..SIZE.0 {
+            let pos = Vec2::new(x as f32, y as f32);
+            if pos.distance(center) < radius {
+                food_data[(y * SIZE.0 + x) as usize] = 1.0;
+            }
+        }
+    }
+    if let Some(image) = images.get_mut(&resources.food_map) {
+        image.data = Some(by_address_of_vec_to_u8_vec(&food_data));
+    }
+
+    // Reset Agents
+    let mut rng = rand::rng();
+    let agents_data: Vec<Agent> = (0..MAX_AGENT_COUNT)
+        .map(|i| {
+            if i < config.active_agents {
+                let angle = rng.random_range(0.0..std::f32::consts::TAU);
+                let offset_dist = rng.random_range(0.0..50.0);
+                let offset_angle = rng.random_range(0.0..std::f32::consts::TAU);
+                let pos = center + Vec2::new(
+                    offset_angle.cos() * offset_dist,
+                    offset_angle.sin() * offset_dist,
+                );
+                Agent {
+                    pos,
+                    angle,
+                    health: 0.5,
+                }
+            } else {
+                Agent {
+                    pos: Vec2::ZERO,
+                    angle: 0.0,
+                    health: 0.0,
+                }
+            }
+        })
+        .collect();
+    if let Some(buffer) = buffers.get_mut(&resources.agents) {
+        buffer.set_data(agents_data);
+    }
+
+    // Reset Spawn Data (dead list)
+    let mut spawn_vec = vec![0u32; 4 + MAX_AGENT_COUNT as usize];
+    spawn_vec[0] = MAX_AGENT_COUNT - config.active_agents;
+    for i in 0..(MAX_AGENT_COUNT - config.active_agents) {
+        spawn_vec[4 + i as usize] = config.active_agents + i;
+    }
+    if let Some(buffer) = buffers.get_mut(&resources.spawn_data) {
+        buffer.set_data(spawn_vec);
+    }
+    
+    // Clear trail map
+    if let Some(image) = images.get_mut(&resources.trail_map) {
+        if let Some(ref mut data) = image.data {
+            data.fill(0);
+        }
+    }
+    
+    // Clear display map
+    if let Some(image) = images.get_mut(&resources.display_map) {
+        if let Some(ref mut data) = image.data {
+            data.fill(0);
+        }
+    }
+}
+
+fn by_address_of_vec_to_u8_vec<T: bytemuck::Pod>(v: &Vec<T>) -> Vec<u8> {
+    bytemuck::cast_slice(v).to_vec()
 }
 
 // --- Compute Infrastructure ---
@@ -403,6 +668,7 @@ fn prepare_bind_group(
 
     if pipeline.bind_group_layout.is_none() {
         let entries = vec![
+            // 0: Agents
             BindGroupLayoutEntry {
                 binding: 0,
                 visibility: ShaderStages::COMPUTE,
@@ -413,6 +679,7 @@ fn prepare_bind_group(
                 },
                 count: None,
             },
+            // 1: Trail Map
             BindGroupLayoutEntry {
                 binding: 1,
                 visibility: ShaderStages::COMPUTE,
@@ -423,8 +690,42 @@ fn prepare_bind_group(
                 },
                 count: None,
             },
+            // 2: Food Map
             BindGroupLayoutEntry {
                 binding: 2,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::StorageTexture {
+                    access: StorageTextureAccess::ReadWrite,
+                    format: TextureFormat::R32Float,
+                    view_dimension: TextureViewDimension::D2,
+                },
+                count: None,
+            },
+            // 3: Spawn Data
+            BindGroupLayoutEntry {
+                binding: 3,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // 4: Display Map
+            BindGroupLayoutEntry {
+                binding: 4,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::StorageTexture {
+                    access: StorageTextureAccess::ReadWrite,
+                    format: TextureFormat::Rgba8Unorm,
+                    view_dimension: TextureViewDimension::D2,
+                },
+                count: None,
+            },
+            // 5: Config
+            BindGroupLayoutEntry {
+                binding: 5,
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
@@ -472,7 +773,16 @@ fn prepare_bind_group(
     let Some(trail_map) = render_assets.get(&resources.trail_map) else {
         return;
     };
+    let Some(food_map) = render_assets.get(&resources.food_map) else {
+        return;
+    };
+    let Some(display_map) = render_assets.get(&resources.display_map) else {
+        return;
+    };
     let Some(agents_buffer) = render_buffers.get(&resources.agents) else {
+        return;
+    };
+    let Some(spawn_buffer) = render_buffers.get(&resources.spawn_data) else {
         return;
     };
     let Some(simulate_id) = pipeline.simulate_pipeline else {
@@ -500,6 +810,18 @@ fn prepare_bind_group(
             },
             BindGroupEntry {
                 binding: 2,
+                resource: BindingResource::TextureView(&food_map.texture_view),
+            },
+            BindGroupEntry {
+                binding: 3,
+                resource: spawn_buffer.buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 4,
+                resource: BindingResource::TextureView(&display_map.texture_view),
+            },
+            BindGroupEntry {
+                binding: 5,
                 resource: config_buffer.buffer().unwrap().as_entire_binding(),
             },
         ],
@@ -548,11 +870,9 @@ impl render_graph::Node for PhysarumNode {
 
         pass.set_bind_group(0, &bind_group.0, &[]);
 
-        let active_agents = world.resource::<PhysarumConfigResource>().config.active_agents;
-
         // Simulate
         pass.set_pipeline(simulate_pipeline);
-        pass.dispatch_workgroups((active_agents + 63) / 64, 1, 1);
+        pass.dispatch_workgroups((MAX_AGENT_COUNT + 63) / 64, 1, 1);
 
         // Diffuse
         pass.set_pipeline(diffuse_pipeline);
