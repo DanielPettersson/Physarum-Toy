@@ -82,7 +82,10 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     let w_fr = max(0.0, v_far_right);
     let total_weight = w_fwd + w_l + w_r + w_fl + w_fr;
     
-    if (total_weight > 0.0) {
+    let random_val = f32(hash(agent_index ^ u32(agent.pos.x * 1000.0) ^ u32(agent.pos.y * 1000.0))) / 4294967295.0;
+
+    // Use a small threshold to allow "sprouting" (ignoring very weak signals)
+    if (total_weight > 0.05) {
         // Attraction: Continuous weighted steering towards the strongest signal
         let desired_offset = (
             config.sensor_angle * w_l + 
@@ -91,7 +94,9 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
             -config.sensor_angle * 2.0 * w_fr
         ) / total_weight;
         
-        agent.angle += desired_offset * config.turn_speed * config.delta_time;
+        // Add random jitter even when following a trail to encourage branching
+        let jitter = (random_val - 0.5) * 2.0 * 0.1; 
+        agent.angle += (desired_offset + jitter) * config.turn_speed * config.delta_time;
     } else if (v_fwd < 0.0 || v_left < 0.0 || v_right < 0.0 || v_far_left < 0.0 || v_far_right < 0.0) {
         // Repulsion: Everything seen is negative or neutral. Steer away from strongest repulsion.
         var min_val = v_fwd;
@@ -113,8 +118,7 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
             agent.angle -= sign(min_offset) * config.turn_speed * config.delta_time;
         }
     } else {
-        // Exploration: All sensors are zero. Brownian motion to find trails.
-        let random_val = f32(hash(agent_index ^ u32(agent.pos.x * 1000.0) ^ u32(agent.pos.y * 1000.0))) / 4294967295.0;
+        // Exploration: No signal or below threshold. Brownian motion to find trails.
         agent.angle += (random_val - 0.5) * 2.0 * config.turn_speed * sqrt(max(config.delta_time, 0.0001) / 60.0);
     }
     
