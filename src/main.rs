@@ -32,20 +32,20 @@ const MAX_AGENT_COUNT: u32 = 2_000_000;
 /// The resolution of the simulation and window.
 const SIZE: (u32, u32) = (1920, 1080);
 
-const DEFAULT_SENSOR_ANGLE: f32 = 30.0f32.to_radians();
+const DEFAULT_SENSOR_ANGLE: f32 = 27.0f32.to_radians();
 const DEFAULT_SENSOR_DIST: f32 = 15.0;
 const DEFAULT_TURN_SPEED: f32 = 550.0f32.to_radians();
 const DEFAULT_MOVE_SPEED: f32 = 80.0;
 const DEFAULT_AGENT_COUNT: u32 = 1_500_000;
 const DEFAULT_DECAY: f32 = 1.0;
 const DEFAULT_DIFFUSE_SPEED: f32 = 60.0;
-const DEFAULT_DEPOSIT_AMOUNT: f32 = 0.2;
+const DEFAULT_DEPOSIT_AMOUNT: f32 = 0.5;
 
 const DEFAULT_SPECIES_WEIGHTS: Vec4 = Vec4::new(1.0, 1.0, 1.0, 0.0);
 const DEFAULT_INTERACTION_MATRIX: [Vec4; 4] = [
-    Vec4::new(0.5, -1.0, -1.0, 0.0), // Species 0 (Red)
-    Vec4::new(-1.0, 0.5, -1.0, 0.0), // Species 1 (Green)
-    Vec4::new(-1.0, -1.0, 0.5, 0.0), // Species 2 (Blue)
+    Vec4::new(0.35, -1.0, -1.0, 0.0), // Species 0 (Red)
+    Vec4::new(-1.0, 0.35, -1.0, 0.0), // Species 1 (Green)
+    Vec4::new(-1.0, -1.0, 0.35, 0.0), // Species 2 (Blue)
     Vec4::ZERO,
 ];
 
@@ -182,24 +182,34 @@ fn generate_agents(config: &PhysarumConfig) -> Vec<Agent> {
         1.0 / 3.0
     };
 
+    let centers = [
+        Vec2::new(SIZE.0 as f32 / 2.0, SIZE.1 as f32 / 4.0),       // Species 0
+        Vec2::new(SIZE.0 as f32 / 4.0, SIZE.1 as f32 * 3.0 / 4.0), // Species 1
+        Vec2::new(SIZE.0 as f32 * 3.0 / 4.0, SIZE.1 as f32 * 3.0 / 4.0), // Species 2
+    ];
+    let spawn_radius = 200.0;
+
     (0..MAX_AGENT_COUNT)
         .map(|_| {
             let angle = rng.random_range(0.0..std::f32::consts::TAU);
-            let r = rng.random_range(0.0..1.0);
-            let species = if r < w0 {
+            let r_species = rng.random_range(0.0..1.0);
+            let species = if r_species < w0 {
                 0
-            } else if r < w0 + w1 {
+            } else if r_species < w0 + w1 {
                 1
             } else {
                 2
             };
+
+            // Generate uniform random position within a circle cluster
+            let r = spawn_radius * rng.random_range(0.0..1.0f32).sqrt();
+            let theta = rng.random_range(0.0..std::f32::consts::TAU);
+            let pos = centers[species] + Vec2::new(theta.cos() * r, theta.sin() * r);
+
             Agent {
-                pos: Vec2::new(
-                    rng.random_range(0.0..SIZE.0 as f32),
-                    rng.random_range(0.0..SIZE.1 as f32),
-                ),
+                pos,
                 angle,
-                species,
+                species: species as u32,
             }
         })
         .collect()
