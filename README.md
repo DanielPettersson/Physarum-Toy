@@ -11,7 +11,7 @@ This project implements the agent-based model described by Jeff Jones in ["Chara
 The simulation consists of 1,000,000 individual agents (agents) that:
 1.  **Sense**: Detect pheromone intensity in front and to the sides using sensors.
 2.  **Turn**: Rotate towards the direction with the highest pheromone concentration.
-3.  **Move**: Advance forward and deposit new pheromones onto a trail map.
+3.  **Move**: Advance forward at a speed scaled by the sensed pheromone intensity (20% to 100% of max speed) and deposit new pheromones onto a trail map.
 4.  **Diffuse & Decay**: The trail map undergoes a box blur (diffusion) and constant evaporation (decay) every frame.
 
 The emergent behavior produces complex, organic branching structures reminiscent of biological slime molds.
@@ -45,7 +45,7 @@ PhysarumConfig {
     sensor_angle: 0.35,  // Angle of sensors in radians
     sensor_dist: 15.0,   // Distance of sensors from agent
     turn_speed: 10.0,    // Turning rate
-    move_speed: 50.0,    // Movement speed
+    move_speed: 50.0,    // Maximum movement speed (scales with trail intensity)
     decay: 1.0,          // Trail evaporation rate
     // ...
 }

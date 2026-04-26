@@ -291,8 +291,8 @@ fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfig
                     ui.end_row();
 
                     // Move Speed
-                    ui.label("Move Speed")
-                        .on_hover_text("The speed at which the agent moves forward (in pixels per second).");
+                    ui.label("Max Move Speed")
+                        .on_hover_text("The maximum speed of the agents. They move slower when sensing less pheromone (min 20% of max).");
                     ui.add_sized(
                         [140.0, 20.0],
                         egui::Slider::new(&mut config.move_speed, 0.0..=500.0).show_value(false),

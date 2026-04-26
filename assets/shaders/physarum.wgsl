@@ -84,9 +84,13 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
         agent.angle -= config.turn_speed * config.delta_time;
     }
     
+    // Scale movement speed based on sensed pheromones
+    let max_sense = max(v_fwd, max(v_left, v_right));
+    let speed_multiplier = mix(0.2, 1.0, clamp(max_sense, 0.0, 1.0));
+    
     // Move agent forward
     let dir = vec2<f32>(cos(agent.angle), sin(agent.angle));
-    agent.pos += dir * config.move_speed * config.delta_time;
+    agent.pos += dir * config.move_speed * speed_multiplier * config.delta_time;
     
     // Wrap around boundaries
     agent.pos.x = fract(agent.pos.x / f32(config.width)) * f32(config.width);
