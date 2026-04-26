@@ -29,10 +29,10 @@ const MAX_AGENT_COUNT: u32 = 2_000_000;
 /// The resolution of the simulation and window.
 const SIZE: (u32, u32) = (1920, 1080);
 
-const DEFAULT_SENSOR_ANGLE: f32 = 20.0f32.to_radians();
+const DEFAULT_SENSOR_ANGLE: f32 = 35.0f32.to_radians();
 const DEFAULT_SENSOR_DIST: f32 = 15.0;
 const DEFAULT_TURN_SPEED: f32 = 550.0f32.to_radians();
-const DEFAULT_MOVE_SPEED: f32 = 50.0;
+const DEFAULT_MOVE_SPEED: f32 = 80.0;
 const DEFAULT_AGENT_COUNT: u32 = 1_000_000;
 const DEFAULT_DECAY: f32 = 1.0;
 const DEFAULT_DIFFUSE_SPEED: f32 = 60.0;
@@ -80,6 +80,12 @@ fn main() {
                 active_agents: DEFAULT_AGENT_COUNT,
                 _pad1: 0.0,
                 _pad2: 0.0,
+                interaction_matrix: [
+                    Vec4::new(1.0, -1.0, -1.0, 0.0), // Species 0 (Red)
+                    Vec4::new(-1.0, 1.0, -1.0, 0.0), // Species 1 (Green)
+                    Vec4::new(-1.0, -1.0, 1.0, 0.0), // Species 2 (Blue)
+                    Vec4::ZERO,
+                ],
             },
         })
         .add_systems(Startup, setup)
@@ -114,8 +120,8 @@ struct Agent {
     pos: Vec2,
     /// Orientation angle in radians.
     angle: f32,
-    /// Padding for GPU alignment.
-    _pad: f32,
+    /// The species ID of the agent (0, 1, or 2).
+    species: u32,
 }
 
 /// Configuration parameters for the Physarum simulation.
@@ -146,6 +152,8 @@ struct PhysarumConfig {
     _pad1: f32,
     /// Padding for WebGPU 16-byte uniform alignment (size must be multiple of 16).
     _pad2: f32,
+    /// Matrix defining how each species (rows) interacts with each color channel (columns: R, G, B, A).
+    interaction_matrix: [Vec4; 4],
 }
 
 /// Initializes the simulation resources, agents, and camera.
@@ -182,7 +190,7 @@ fn setup(
                     rng.random_range(0.0..SIZE.1 as f32),
                 ),
                 angle,
-                _pad: 0.0,
+                species: rng.random_range(0..3),
             }
         })
         .collect();
@@ -337,13 +345,52 @@ fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfig
                 });
 
             ui.add_space(20.0);
+            ui.separator();
+            ui.heading("Species Interaction");
+            ui.add_space(5.0);
+            ui.label("Attraction/Repulsion weights for each species (row) towards different pheromone (column).");
+            ui.add_space(5.0);
+
+            let species_names = ["Red", "Green", "Blue"];
+            egui::Grid::new("interaction_grid")
+                .num_columns(4)
+                .spacing([10.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("");
+                    ui.label("Red").on_hover_text("Red pheromone sensed.");
+                    ui.label("Green").on_hover_text("Green pheromone sensed.");
+                    ui.label("Blue").on_hover_text("Blue pheromone sensed.");
+                    ui.end_row();
+
+                    for i in 0..3 {
+                        ui.label(species_names[i]);
+                        for j in 0..3 {
+                            let val = match j {
+                                0 => &mut config.interaction_matrix[i].x,
+                                1 => &mut config.interaction_matrix[i].y,
+                                2 => &mut config.interaction_matrix[i].z,
+                                _ => unreachable!(),
+                            };
+                            ui.add(egui::DragValue::new(val).speed(0.01).range(-1.0..=1.0));
+                        }
+                        ui.end_row();
+                    }
+                });
+
+            ui.add_space(20.0);
             if ui.button("Reset to Defaults").clicked() {
                 config.sensor_angle = DEFAULT_SENSOR_ANGLE;
                 config.sensor_dist = DEFAULT_SENSOR_DIST;
                 config.turn_speed = DEFAULT_TURN_SPEED;
                 config.move_speed = DEFAULT_MOVE_SPEED;
                 config.decay = DEFAULT_DECAY;
-                config.active_agents =DEFAULT_AGENT_COUNT;
+                config.active_agents = DEFAULT_AGENT_COUNT;
+                config.interaction_matrix = [
+                    Vec4::new(1.0, -1.0, -1.0, 0.0),
+                    Vec4::new(-1.0, 1.0, -1.0, 0.0),
+                    Vec4::new(-1.0, -1.0, 1.0, 0.0),
+                    Vec4::ZERO,
+                ];
             }
         });
 }

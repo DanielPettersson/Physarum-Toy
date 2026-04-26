@@ -3,7 +3,7 @@
 struct Agent {
     pos: vec2<f32>,
     angle: f32,
-    _pad: f32,
+    species: u32,
 }
 
 struct Config {
@@ -19,6 +19,7 @@ struct Config {
     active_agents: u32,
     _pad1: f32,
     _pad2: f32,
+    interaction_matrix: mat4x4<f32>,
 }
 
 @group(0) @binding(0)
@@ -51,7 +52,9 @@ fn sense(agent: Agent, sensor_angle_offset: f32) -> f32 {
     let x = (i32(sensor_pos.x) % i32(config.width) + i32(config.width)) % i32(config.width);
     let y = (i32(sensor_pos.y) % i32(config.height) + i32(config.height)) % i32(config.height);
     
-    return textureLoad(trail_map, vec2<i32>(x, y)).r;
+    let trail = textureLoad(trail_map, vec2<i32>(x, y));
+    // Calculate attraction/repulsion based on species interaction matrix
+    return dot(trail, config.interaction_matrix[agent.species]);
 }
 
 /// Agent simulation step: Senses pheromones, turns, moves, and deposits trail.
@@ -101,7 +104,18 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     // Deposit trail at new position
     let x = i32(agent.pos.x);
     let y = i32(agent.pos.y);
-    textureStore(trail_map, vec2<i32>(x, y), vec4<f32>(1.0, 1.0, 1.0, 1.0));
+    
+    // Select color channel based on species
+    var deposit = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    if (agent.species == 0u) {
+        deposit.r = 1.0;
+    } else if (agent.species == 1u) {
+        deposit.g = 1.0;
+    } else if (agent.species == 2u) {
+        deposit.b = 1.0;
+    }
+    
+    textureStore(trail_map, vec2<i32>(x, y), deposit);
 }
 
 /// Pheromone diffusion and decay step: Spreads trails and reduces intensity over time.
