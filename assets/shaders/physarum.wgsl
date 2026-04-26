@@ -19,6 +19,7 @@ struct Config {
     active_agents: u32,
     _pad1: f32,
     _pad2: f32,
+    species_weights: vec4<f32>,
     interaction_matrix: mat4x4<f32>,
 }
 

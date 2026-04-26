@@ -24,12 +24,15 @@ use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use bytemuck::{Pod, Zeroable};
 use rand::RngExt;
 
+#[derive(Message)]
+struct RespawnAgentsEvent;
+
 /// The max number of agents in the simulation.
 const MAX_AGENT_COUNT: u32 = 2_000_000;
 /// The resolution of the simulation and window.
 const SIZE: (u32, u32) = (1920, 1080);
 
-const DEFAULT_SENSOR_ANGLE: f32 = 35.0f32.to_radians();
+const DEFAULT_SENSOR_ANGLE: f32 = 30.0f32.to_radians();
 const DEFAULT_SENSOR_DIST: f32 = 15.0;
 const DEFAULT_TURN_SPEED: f32 = 550.0f32.to_radians();
 const DEFAULT_MOVE_SPEED: f32 = 80.0;
@@ -86,10 +89,12 @@ fn main() {
                     Vec4::new(-1.0, -1.0, 1.0, 0.0), // Species 2 (Blue)
                     Vec4::ZERO,
                 ],
+                species_weights: Vec4::new(1.0, 1.0, 1.0, 0.0),
             },
         })
+        .add_message::<RespawnAgentsEvent>()
         .add_systems(Startup, setup)
-        .add_systems(Update, (update_config, move_fps_overlay))
+        .add_systems(Update, (update_config, move_fps_overlay, handle_respawn))
         .add_systems(EguiPrimaryContextPass, physarum_ui)
         .add_plugins(PhysarumComputePlugin)
         .run();
@@ -152,6 +157,8 @@ struct PhysarumConfig {
     _pad1: f32,
     /// Padding for WebGPU 16-byte uniform alignment (size must be multiple of 16).
     _pad2: f32,
+    /// Weights for species distribution (Red, Green, Blue, _unused).
+    species_weights: Vec4,
     /// Matrix defining how each species (rows) interacts with each color channel (columns: R, G, B, A).
     interaction_matrix: [Vec4; 4],
 }
@@ -162,6 +169,7 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
     asset_server: Res<AssetServer>,
+    config_res: Res<PhysarumConfigResource>,
 ) {
     // Create trail map image
     let mut image = Image::new_fill(
@@ -181,16 +189,29 @@ fn setup(
 
     // Initialize agents
     let mut rng = rand::rng();
+    let config = &config_res.config;
+    let total_weight = config.species_weights.x + config.species_weights.y + config.species_weights.z;
+    let w0 = if total_weight > 0.0 { config.species_weights.x / total_weight } else { 1.0 / 3.0 };
+    let w1 = if total_weight > 0.0 { config.species_weights.y / total_weight } else { 1.0 / 3.0 };
+
     let agents_data: Vec<Agent> = (0..MAX_AGENT_COUNT)
         .map(|_| {
             let angle = rng.random_range(0.0..std::f32::consts::TAU);
+            let r = rng.random_range(0.0..1.0);
+            let species = if r < w0 {
+                0
+            } else if r < w0 + w1 {
+                1
+            } else {
+                2
+            };
             Agent {
                 pos: Vec2::new(
                     rng.random_range(0.0..SIZE.0 as f32),
                     rng.random_range(0.0..SIZE.1 as f32),
                 ),
                 angle,
-                species: rng.random_range(0..3),
+                species,
             }
         })
         .collect();
@@ -218,6 +239,52 @@ fn update_config(time: Res<Time>, mut config_res: ResMut<PhysarumConfigResource>
     config_res.config.delta_time = time.delta_secs();
 }
 
+/// System that handles respawning agents with a new species distribution.
+fn handle_respawn(
+    mut events: MessageReader<RespawnAgentsEvent>,
+    config_res: Res<PhysarumConfigResource>,
+    resources: Res<PhysarumResources>,
+    mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
+) {
+    if events.is_empty() {
+        return;
+    }
+    events.clear();
+
+    let config = &config_res.config;
+    let mut rng = rand::rng();
+    
+    let total_weight = config.species_weights.x + config.species_weights.y + config.species_weights.z;
+    let w0 = if total_weight > 0.0 { config.species_weights.x / total_weight } else { 1.0 / 3.0 };
+    let w1 = if total_weight > 0.0 { config.species_weights.y / total_weight } else { 1.0 / 3.0 };
+
+    let agents_data: Vec<Agent> = (0..MAX_AGENT_COUNT)
+        .map(|_| {
+            let angle = rng.random_range(0.0..std::f32::consts::TAU);
+            let r = rng.random_range(0.0..1.0);
+            let species = if r < w0 {
+                0
+            } else if r < w0 + w1 {
+                1
+            } else {
+                2
+            };
+            Agent {
+                pos: Vec2::new(
+                    rng.random_range(0.0..SIZE.0 as f32),
+                    rng.random_range(0.0..SIZE.1 as f32),
+                ),
+                angle,
+                species,
+            }
+        })
+        .collect();
+
+    if let Some(buffer) = buffers.get_mut(&resources.agents) {
+        *buffer = ShaderStorageBuffer::from(agents_data);
+    }
+}
+
 /// Adjusts the position of the FPS overlay to the bottom-left corner.
 fn move_fps_overlay(mut query: Query<(&mut Node, &GlobalZIndex)>) {
     for (mut node, z_index) in &mut query {
@@ -230,7 +297,11 @@ fn move_fps_overlay(mut query: Query<(&mut Node, &GlobalZIndex)>) {
 }
 
 /// System that draws the configuration UI.
-fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfigResource>) {
+fn physarum_ui(
+    mut contexts: EguiContexts,
+    mut config_res: ResMut<PhysarumConfigResource>,
+    mut respawn_events: MessageWriter<RespawnAgentsEvent>,
+) {
     let ctx = match contexts.ctx_mut() {
         Ok(ctx) => ctx,
         Err(_) => return,
@@ -346,6 +417,32 @@ fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfig
 
             ui.add_space(20.0);
             ui.separator();
+            ui.heading("Species Distribution");
+            ui.add_space(5.0);
+            ui.label("Relative weights for spawning each species.");
+
+            egui::Grid::new("distribution_grid")
+                .num_columns(2)
+                .spacing([10.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("Red");
+                    ui.add(egui::Slider::new(&mut config.species_weights.x, 0.0..=1.0));
+                    ui.end_row();
+                    ui.label("Green");
+                    ui.add(egui::Slider::new(&mut config.species_weights.y, 0.0..=1.0));
+                    ui.end_row();
+                    ui.label("Blue");
+                    ui.add(egui::Slider::new(&mut config.species_weights.z, 0.0..=1.0));
+                    ui.end_row();
+                });
+
+            ui.add_space(5.0);
+            if ui.button("Respawn Agents").clicked() {
+                respawn_events.write(RespawnAgentsEvent);
+            }
+
+            ui.add_space(20.0);
+            ui.separator();
             ui.heading("Species Interaction");
             ui.add_space(5.0);
             ui.label("Attraction/Repulsion weights for each species (row) towards different pheromone (column).");
@@ -385,6 +482,7 @@ fn physarum_ui(mut contexts: EguiContexts, mut config_res: ResMut<PhysarumConfig
                 config.move_speed = DEFAULT_MOVE_SPEED;
                 config.decay = DEFAULT_DECAY;
                 config.active_agents = DEFAULT_AGENT_COUNT;
+                config.species_weights = Vec4::new(1.0, 1.0, 1.0, 0.0);
                 config.interaction_matrix = [
                     Vec4::new(1.0, -1.0, -1.0, 0.0),
                     Vec4::new(-1.0, 1.0, -1.0, 0.0),
