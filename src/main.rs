@@ -19,7 +19,7 @@ use bevy::{
         texture::GpuImage,
     },
 };
-use bevy::window::WindowResolution;
+use bevy::window::{WindowResized, WindowResolution};
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use bytemuck::{Pod, Zeroable};
 use rand::RngExt;
@@ -28,7 +28,7 @@ use rand::RngExt;
 struct RespawnAgentsEvent;
 
 /// The max number of agents in the simulation.
-const MAX_AGENT_COUNT: u32 = 2_000_000;
+const MAX_AGENT_COUNT: u32 = 4_000_000;
 /// The resolution of the simulation and window.
 const SIZE: (u32, u32) = (1920, 1080);
 
@@ -37,8 +37,8 @@ const DEFAULT_SENSOR_DIST: f32 = 13.0;
 const DEFAULT_TURN_SPEED: f32 = 550.0f32.to_radians();
 const DEFAULT_MOVE_SPEED: f32 = 190.0;
 const DEFAULT_AGENT_COUNT: u32 = 1_500_000;
-const DEFAULT_DECAY: f32 = 1.0;
-const DEFAULT_DIFFUSE_SPEED: f32 = 60.0;
+const DEFAULT_DECAY: f32 = 2.0;
+const DEFAULT_DIFFUSE_SPEED: f32 = 30.0;
 const DEFAULT_DEPOSIT_AMOUNT: f32 = 0.007;
 const DEFAULT_SPAWN_RADIUS: f32 = 0.55;
 const DEFAULT_JITTER_AMOUNT: f32 = 0.1;
@@ -104,7 +104,7 @@ fn main() {
         })
         .add_message::<RespawnAgentsEvent>()
         .add_systems(Startup, setup)
-        .add_systems(Update, (update_config, move_fps_overlay, handle_respawn))
+        .add_systems(Update, (update_config, handle_window_resize, move_fps_overlay, handle_respawn))
         .add_systems(EguiPrimaryContextPass, physarum_ui)
         .add_plugins(PhysarumComputePlugin)
         .run();
@@ -277,6 +277,41 @@ fn setup(
 /// Updates the delta time in the simulation configuration.
 fn update_config(time: Res<Time>, mut config_res: ResMut<PhysarumConfigResource>) {
     config_res.config.delta_time = time.delta_secs();
+}
+
+/// Updates the simulation configuration and resources when the window is resized.
+fn handle_window_resize(
+    mut resize_reader: MessageReader<WindowResized>,
+    mut config_res: ResMut<PhysarumConfigResource>,
+    mut images: ResMut<Assets<Image>>,
+    resources: Res<PhysarumResources>,
+    mut query: Query<&mut Sprite>,
+) {
+    for e in resize_reader.read() {
+        let new_width = e.width as u32;
+        let new_height = e.height as u32;
+
+        if new_width == 0 || new_height == 0 {
+            continue;
+        }
+
+        config_res.config.width = new_width;
+        config_res.config.height = new_height;
+
+        // Resize the trail map image
+        if let Some(image) = images.get_mut(&resources.trail_map) {
+            image.resize(Extent3d {
+                width: new_width,
+                height: new_height,
+                depth_or_array_layers: 1,
+            });
+        }
+
+        // Update the sprite size to match the new window size
+        for mut sprite in query.iter_mut() {
+            sprite.custom_size = Some(Vec2::new(new_width as f32, new_height as f32));
+        }
+    }
 }
 
 /// System that handles respawning agents with a new species distribution.
@@ -770,6 +805,8 @@ impl render_graph::Node for PhysarumNode {
         pass.set_bind_group(0, &bind_group.0, &[]);
 
         let active_agents = world.resource::<PhysarumConfigResource>().config.active_agents;
+        let width = world.resource::<PhysarumConfigResource>().config.width;
+        let height = world.resource::<PhysarumConfigResource>().config.height;
 
         // Simulate
         pass.set_pipeline(simulate_pipeline);
@@ -777,7 +814,7 @@ impl render_graph::Node for PhysarumNode {
 
         // Diffuse
         pass.set_pipeline(diffuse_pipeline);
-        pass.dispatch_workgroups((SIZE.0 + 15) / 16, (SIZE.1 + 15) / 16, 1);
+        pass.dispatch_workgroups((width + 15) / 16, (height + 15) / 16, 1);
 
         Ok(())
     }
