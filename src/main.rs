@@ -39,6 +39,7 @@ const DEFAULT_MOVE_SPEED: f32 = 80.0;
 const DEFAULT_AGENT_COUNT: u32 = 1_000_000;
 const DEFAULT_DECAY: f32 = 1.0;
 const DEFAULT_DIFFUSE_SPEED: f32 = 60.0;
+const DEFAULT_DEPOSIT_AMOUNT: f32 = 0.1;
 
 fn main() {
     App::new()
@@ -81,7 +82,7 @@ fn main() {
                 delta_time: 0.0,
                 diffuse_speed: DEFAULT_DIFFUSE_SPEED,
                 active_agents: DEFAULT_AGENT_COUNT,
-                _pad1: 0.0,
+                deposit_amount: DEFAULT_DEPOSIT_AMOUNT,
                 _pad2: 0.0,
                 interaction_matrix: [
                     Vec4::new(1.0, -1.0, -1.0, 0.0), // Species 0 (Red)
@@ -153,8 +154,8 @@ struct PhysarumConfig {
     diffuse_speed: f32,
     /// The number of agents to simulate.
     active_agents: u32,
-    /// Padding for WebGPU 16-byte uniform alignment (size must be multiple of 16).
-    _pad1: f32,
+    /// Amount of pheromone an agent deposits each step.
+    deposit_amount: f32,
     /// Padding for WebGPU 16-byte uniform alignment (size must be multiple of 16).
     _pad2: f32,
     /// Weights for species distribution (Red, Green, Blue, _unused).
@@ -413,6 +414,19 @@ fn physarum_ui(
                         config.decay = 1.0 / evap_time;
                     }
                     ui.end_row();
+
+                    // Deposit Amount
+                    ui.label("Deposit Amount")
+                        .on_hover_text("The amount of pheromone an agent deposits each step.");
+                    ui.add_sized(
+                        [140.0, 20.0],
+                        egui::Slider::new(&mut config.deposit_amount, 0.0..=1.0).show_value(false),
+                    );
+                    ui.add_sized(
+                        [60.0, 20.0],
+                        egui::DragValue::new(&mut config.deposit_amount).speed(0.01),
+                    );
+                    ui.end_row();
                 });
 
             ui.add_space(20.0);
@@ -482,6 +496,7 @@ fn physarum_ui(
                 config.move_speed = DEFAULT_MOVE_SPEED;
                 config.decay = DEFAULT_DECAY;
                 config.active_agents = DEFAULT_AGENT_COUNT;
+                config.deposit_amount = DEFAULT_DEPOSIT_AMOUNT;
                 config.species_weights = Vec4::new(1.0, 1.0, 1.0, 0.0);
                 config.interaction_matrix = [
                     Vec4::new(1.0, -1.0, -1.0, 0.0),

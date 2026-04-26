@@ -17,7 +17,7 @@ struct Config {
     delta_time: f32,
     diffuse_speed: f32,
     active_agents: u32,
-    _pad1: f32,
+    deposit_amount: f32,
     _pad2: f32,
     species_weights: vec4<f32>,
     interaction_matrix: mat4x4<f32>,
@@ -106,17 +106,21 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     let x = i32(agent.pos.x);
     let y = i32(agent.pos.y);
     
-    // Select color channel based on species
-    var deposit = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    // Select color channel based on species and use deposit_amount
+    var deposit = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     if (agent.species == 0u) {
-        deposit.r = 1.0;
+        deposit.r = config.deposit_amount;
     } else if (agent.species == 1u) {
-        deposit.g = 1.0;
+        deposit.g = config.deposit_amount;
     } else if (agent.species == 2u) {
-        deposit.b = 1.0;
+        deposit.b = config.deposit_amount;
     }
     
-    textureStore(trail_map, vec2<i32>(x, y), deposit);
+    // Read current value and add new deposit, clamping to 1.0
+    let current = textureLoad(trail_map, vec2<i32>(x, y));
+    let new_val = min(current + deposit, vec4<f32>(1.0));
+    
+    textureStore(trail_map, vec2<i32>(x, y), new_val);
 }
 
 /// Pheromone diffusion and decay step: Spreads trails and reduces intensity over time.
