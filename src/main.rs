@@ -41,6 +41,14 @@ const DEFAULT_DECAY: f32 = 1.0;
 const DEFAULT_DIFFUSE_SPEED: f32 = 60.0;
 const DEFAULT_DEPOSIT_AMOUNT: f32 = 0.2;
 
+const DEFAULT_SPECIES_WEIGHTS: Vec4 = Vec4::new(1.0, 1.0, 1.0, 0.0);
+const DEFAULT_INTERACTION_MATRIX: [Vec4; 4] = [
+    Vec4::new(0.5, -1.0, -1.0, 0.0), // Species 0 (Red)
+    Vec4::new(-1.0, 0.5, -1.0, 0.0), // Species 1 (Green)
+    Vec4::new(-1.0, -1.0, 0.5, 0.0), // Species 2 (Blue)
+    Vec4::ZERO,
+];
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -84,13 +92,8 @@ fn main() {
                 active_agents: DEFAULT_AGENT_COUNT,
                 deposit_amount: DEFAULT_DEPOSIT_AMOUNT,
                 _pad2: 0.0,
-                interaction_matrix: [
-                    Vec4::new(0.5, -1.0, -1.0, 0.0), // Species 0 (Red)
-                    Vec4::new(-1.0, 0.5, -1.0, 0.0), // Species 1 (Green)
-                    Vec4::new(-1.0, -1.0, 0.5, 0.0), // Species 2 (Blue)
-                    Vec4::ZERO,
-                ],
-                species_weights: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                interaction_matrix: DEFAULT_INTERACTION_MATRIX,
+                species_weights: DEFAULT_SPECIES_WEIGHTS,
             },
         })
         .add_message::<RespawnAgentsEvent>()
@@ -164,6 +167,44 @@ struct PhysarumConfig {
     interaction_matrix: [Vec4; 4],
 }
 
+/// Generates a vector of agents with positions and species distributed according to the configuration.
+fn generate_agents(config: &PhysarumConfig) -> Vec<Agent> {
+    let mut rng = rand::rng();
+    let total_weight = config.species_weights.x + config.species_weights.y + config.species_weights.z;
+    let w0 = if total_weight > 0.0 {
+        config.species_weights.x / total_weight
+    } else {
+        1.0 / 3.0
+    };
+    let w1 = if total_weight > 0.0 {
+        config.species_weights.y / total_weight
+    } else {
+        1.0 / 3.0
+    };
+
+    (0..MAX_AGENT_COUNT)
+        .map(|_| {
+            let angle = rng.random_range(0.0..std::f32::consts::TAU);
+            let r = rng.random_range(0.0..1.0);
+            let species = if r < w0 {
+                0
+            } else if r < w0 + w1 {
+                1
+            } else {
+                2
+            };
+            Agent {
+                pos: Vec2::new(
+                    rng.random_range(0.0..SIZE.0 as f32),
+                    rng.random_range(0.0..SIZE.1 as f32),
+                ),
+                angle,
+                species,
+            }
+        })
+        .collect()
+}
+
 /// Initializes the simulation resources, agents, and camera.
 fn setup(
     mut commands: Commands,
@@ -189,33 +230,7 @@ fn setup(
     let trail_map_handle = images.add(image);
 
     // Initialize agents
-    let mut rng = rand::rng();
-    let config = &config_res.config;
-    let total_weight = config.species_weights.x + config.species_weights.y + config.species_weights.z;
-    let w0 = if total_weight > 0.0 { config.species_weights.x / total_weight } else { 1.0 / 3.0 };
-    let w1 = if total_weight > 0.0 { config.species_weights.y / total_weight } else { 1.0 / 3.0 };
-
-    let agents_data: Vec<Agent> = (0..MAX_AGENT_COUNT)
-        .map(|_| {
-            let angle = rng.random_range(0.0..std::f32::consts::TAU);
-            let r = rng.random_range(0.0..1.0);
-            let species = if r < w0 {
-                0
-            } else if r < w0 + w1 {
-                1
-            } else {
-                2
-            };
-            Agent {
-                pos: Vec2::new(
-                    rng.random_range(0.0..SIZE.0 as f32),
-                    rng.random_range(0.0..SIZE.1 as f32),
-                ),
-                angle,
-                species,
-            }
-        })
-        .collect();
+    let agents_data = generate_agents(&config_res.config);
     let agents_buffer = buffers.add(ShaderStorageBuffer::from(agents_data));
     let shader = asset_server.load("shaders/physarum.wgsl");
 
@@ -252,34 +267,7 @@ fn handle_respawn(
     }
     events.clear();
 
-    let config = &config_res.config;
-    let mut rng = rand::rng();
-    
-    let total_weight = config.species_weights.x + config.species_weights.y + config.species_weights.z;
-    let w0 = if total_weight > 0.0 { config.species_weights.x / total_weight } else { 1.0 / 3.0 };
-    let w1 = if total_weight > 0.0 { config.species_weights.y / total_weight } else { 1.0 / 3.0 };
-
-    let agents_data: Vec<Agent> = (0..MAX_AGENT_COUNT)
-        .map(|_| {
-            let angle = rng.random_range(0.0..std::f32::consts::TAU);
-            let r = rng.random_range(0.0..1.0);
-            let species = if r < w0 {
-                0
-            } else if r < w0 + w1 {
-                1
-            } else {
-                2
-            };
-            Agent {
-                pos: Vec2::new(
-                    rng.random_range(0.0..SIZE.0 as f32),
-                    rng.random_range(0.0..SIZE.1 as f32),
-                ),
-                angle,
-                species,
-            }
-        })
-        .collect();
+    let agents_data = generate_agents(&config_res.config);
 
     if let Some(buffer) = buffers.get_mut(&resources.agents) {
         *buffer = ShaderStorageBuffer::from(agents_data);
@@ -497,13 +485,8 @@ fn physarum_ui(
                 config.decay = DEFAULT_DECAY;
                 config.active_agents = DEFAULT_AGENT_COUNT;
                 config.deposit_amount = DEFAULT_DEPOSIT_AMOUNT;
-                config.species_weights = Vec4::new(1.0, 1.0, 1.0, 0.0);
-                config.interaction_matrix = [
-                    Vec4::new(0.5, -1.0, -1.0, 0.0),
-                    Vec4::new(-1.0, 0.5, -1.0, 0.0),
-                    Vec4::new(-1.0, -1.0, 0.5, 0.0),
-                    Vec4::ZERO,
-                ];
+                config.species_weights = DEFAULT_SPECIES_WEIGHTS;
+                config.interaction_matrix = DEFAULT_INTERACTION_MATRIX;
             }
         });
 }
