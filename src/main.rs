@@ -36,10 +36,10 @@ const DEFAULT_SENSOR_ANGLE: f32 = 30.0f32.to_radians();
 const DEFAULT_SENSOR_DIST: f32 = 15.0;
 const DEFAULT_TURN_SPEED: f32 = 550.0f32.to_radians();
 const DEFAULT_MOVE_SPEED: f32 = 80.0;
-const DEFAULT_AGENT_COUNT: u32 = 1_000_000;
+const DEFAULT_AGENT_COUNT: u32 = 1_500_000;
 const DEFAULT_DECAY: f32 = 1.0;
 const DEFAULT_DIFFUSE_SPEED: f32 = 60.0;
-const DEFAULT_DEPOSIT_AMOUNT: f32 = 0.1;
+const DEFAULT_DEPOSIT_AMOUNT: f32 = 0.2;
 
 fn main() {
     App::new()
@@ -85,9 +85,9 @@ fn main() {
                 deposit_amount: DEFAULT_DEPOSIT_AMOUNT,
                 _pad2: 0.0,
                 interaction_matrix: [
-                    Vec4::new(1.0, -1.0, -1.0, 0.0), // Species 0 (Red)
-                    Vec4::new(-1.0, 1.0, -1.0, 0.0), // Species 1 (Green)
-                    Vec4::new(-1.0, -1.0, 1.0, 0.0), // Species 2 (Blue)
+                    Vec4::new(0.5, -1.0, -1.0, 0.0), // Species 0 (Red)
+                    Vec4::new(-1.0, 0.5, -1.0, 0.0), // Species 1 (Green)
+                    Vec4::new(-1.0, -1.0, 0.5, 0.0), // Species 2 (Blue)
                     Vec4::ZERO,
                 ],
                 species_weights: Vec4::new(1.0, 1.0, 1.0, 0.0),
@@ -499,9 +499,9 @@ fn physarum_ui(
                 config.deposit_amount = DEFAULT_DEPOSIT_AMOUNT;
                 config.species_weights = Vec4::new(1.0, 1.0, 1.0, 0.0);
                 config.interaction_matrix = [
-                    Vec4::new(1.0, -1.0, -1.0, 0.0),
-                    Vec4::new(-1.0, 1.0, -1.0, 0.0),
-                    Vec4::new(-1.0, -1.0, 1.0, 0.0),
+                    Vec4::new(0.5, -1.0, -1.0, 0.0),
+                    Vec4::new(-1.0, 0.5, -1.0, 0.0),
+                    Vec4::new(-1.0, -1.0, 0.5, 0.0),
                     Vec4::ZERO,
                 ];
             }
