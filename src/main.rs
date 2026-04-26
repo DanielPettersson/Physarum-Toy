@@ -318,11 +318,9 @@ fn physarum_ui(
         Err(_) => return,
     };
 
-    egui::SidePanel::right("config_panel")
+    egui::Window::new("Physarum Config")
+        .default_open(true)
         .show(ctx, |ui| {
-            ui.heading("Physarum Config");
-            ui.add_space(10.0);
-
             let config = &mut config_res.config;
 
             egui::Grid::new("config_grid")
