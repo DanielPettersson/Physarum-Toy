@@ -236,7 +236,7 @@ fn setup(
         TextureDimension::D2,
         &[0, 0, 0, 0, 0, 0, 0, 60],
         TextureFormat::Rgba16Float,
-        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+        bevy::asset::RenderAssetUsages::default(),
     );
     image.texture_descriptor.usage |=
         TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
@@ -274,6 +274,7 @@ fn handle_respawn(
     config_res: Res<PhysarumConfigResource>,
     resources: Res<PhysarumResources>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     if events.is_empty() {
         return;
@@ -284,6 +285,14 @@ fn handle_respawn(
 
     if let Some(buffer) = buffers.get_mut(&resources.agents) {
         *buffer = ShaderStorageBuffer::from(agents_data);
+    }
+
+    if let Some(image) = images.get_mut(&resources.trail_map) {
+        if let Some(data) = &mut image.data {
+            data.chunks_exact_mut(8).for_each(|chunk| {
+                chunk.copy_from_slice(&[0, 0, 0, 0, 0, 0, 0, 60]);
+            });
+        }
     }
 }
 
