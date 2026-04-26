@@ -54,7 +54,6 @@ fn sense(agent: Agent, sensor_angle_offset: f32) -> f32 {
     let y = (i32(sensor_pos.y) % i32(config.height) + i32(config.height)) % i32(config.height);
     
     let trail = textureLoad(trail_map, vec2<i32>(x, y));
-    // Calculate attraction/repulsion based on species interaction matrix
     return dot(trail, config.interaction_matrix[agent.species]);
 }
 
@@ -68,37 +67,59 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     
     var agent = agents[agent_index];
     
-    // Sense pheromones in three directions: forward, left, and right
+    // Sense pheromones in 5 directions for a wider field of view
     let v_fwd = sense(agent, 0.0);
     let v_left = sense(agent, config.sensor_angle);
     let v_right = sense(agent, -config.sensor_angle);
+    let v_far_left = sense(agent, config.sensor_angle * 2.0);
+    let v_far_right = sense(agent, -config.sensor_angle * 2.0);
         
-    if (v_fwd > v_left && v_fwd > v_right) {
-        // Continue forward if strongest trail is ahead
-    } else if (v_fwd < v_left && v_fwd < v_right) {
-        if (v_fwd < 0.0) {
-            // Repulsive trail ahead: break symmetry by turning left or right consistently based on agent ID
+    // Calculate total weight of positive (attractive) signals
+    let w_fwd = max(0.0, v_fwd);
+    let w_l = max(0.0, v_left);
+    let w_r = max(0.0, v_right);
+    let w_fl = max(0.0, v_far_left);
+    let w_fr = max(0.0, v_far_right);
+    let total_weight = w_fwd + w_l + w_r + w_fl + w_fr;
+    
+    if (total_weight > 0.0) {
+        // Attraction: Continuous weighted steering towards the strongest signal
+        let desired_offset = (
+            config.sensor_angle * w_l + 
+            -config.sensor_angle * w_r + 
+            config.sensor_angle * 2.0 * w_fl + 
+            -config.sensor_angle * 2.0 * w_fr
+        ) / total_weight;
+        
+        agent.angle += desired_offset * config.turn_speed * config.delta_time;
+    } else if (v_fwd < 0.0 || v_left < 0.0 || v_right < 0.0 || v_far_left < 0.0 || v_far_right < 0.0) {
+        // Repulsion: Everything seen is negative or neutral. Steer away from strongest repulsion.
+        var min_val = v_fwd;
+        var min_offset = 0.0;
+        if (v_left < min_val) { min_val = v_left; min_offset = config.sensor_angle; }
+        if (v_right < min_val) { min_val = v_right; min_offset = -config.sensor_angle; }
+        if (v_far_left < min_val) { min_val = v_far_left; min_offset = config.sensor_angle * 2.0; }
+        if (v_far_right < min_val) { min_val = v_far_right; min_offset = -config.sensor_angle * 2.0; }
+        
+        if (min_offset == 0.0) {
+            // Most repulsive is forward: turn left or right to escape
             if ((hash(agent_index) % 2u) == 0u) {
                 agent.angle += config.turn_speed * config.delta_time;
             } else {
                 agent.angle -= config.turn_speed * config.delta_time;
             }
         } else {
-            // Empty space or own trail ahead: turn randomly to branch out (sprout)
-            // Brownian motion scaling: sqrt(dt / reference_dt) where reference_dt is 1/60s.
-            let random_val = f32(hash(agent_index ^ u32(agent.pos.x * 1000.0) ^ u32(agent.pos.y * 1000.0))) / 4294967295.0;
-            agent.angle += (random_val - 0.5) * 2.0 * config.turn_speed * sqrt(max(config.delta_time, 0.0001) / 60.0);
+            // Steer away from the repulsive source
+            agent.angle -= sign(min_offset) * config.turn_speed * config.delta_time;
         }
-    } else if (v_left > v_right) {
-        // Turn left if strongest trail is to the left
-        agent.angle += config.turn_speed * config.delta_time;
-    } else if (v_right > v_left) {
-        // Turn right if strongest trail is to the right
-        agent.angle -= config.turn_speed * config.delta_time;
+    } else {
+        // Exploration: All sensors are zero. Brownian motion to find trails.
+        let random_val = f32(hash(agent_index ^ u32(agent.pos.x * 1000.0) ^ u32(agent.pos.y * 1000.0))) / 4294967295.0;
+        agent.angle += (random_val - 0.5) * 2.0 * config.turn_speed * sqrt(max(config.delta_time, 0.0001) / 60.0);
     }
     
     // Scale movement speed based on sensed pheromones
-    let max_sense = max(v_fwd, max(v_left, v_right));
+    let max_sense = max(v_fwd, max(max(v_left, v_right), max(v_far_left, v_far_right)));
     let speed_multiplier = mix(0.2, 1.0, clamp(max_sense, 0.0, 1.0));
     
     // Move agent forward
