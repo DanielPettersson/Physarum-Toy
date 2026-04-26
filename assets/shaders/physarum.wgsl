@@ -76,10 +76,19 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     if (v_fwd > v_left && v_fwd > v_right) {
         // Continue forward if strongest trail is ahead
     } else if (v_fwd < v_left && v_fwd < v_right) {
-        // Turn randomly if forward is weaker than both sides.
-        // Brownian motion scaling: sqrt(dt / reference_dt) where reference_dt is 1/60s.
-        let random_val = f32(hash(agent_index ^ u32(agent.pos.x * 1000.0) ^ u32(agent.pos.y * 1000.0))) / 4294967295.0;
-        agent.angle += (random_val - 0.5) * 2.0 * config.turn_speed * sqrt(max(config.delta_time, 0.0001) / 60.0);
+        if (v_fwd < 0.0) {
+            // Repulsive trail ahead: break symmetry by turning left or right consistently based on agent ID
+            if ((hash(agent_index) % 2u) == 0u) {
+                agent.angle += config.turn_speed * config.delta_time;
+            } else {
+                agent.angle -= config.turn_speed * config.delta_time;
+            }
+        } else {
+            // Empty space or own trail ahead: turn randomly to branch out (sprout)
+            // Brownian motion scaling: sqrt(dt / reference_dt) where reference_dt is 1/60s.
+            let random_val = f32(hash(agent_index ^ u32(agent.pos.x * 1000.0) ^ u32(agent.pos.y * 1000.0))) / 4294967295.0;
+            agent.angle += (random_val - 0.5) * 2.0 * config.turn_speed * sqrt(max(config.delta_time, 0.0001) / 60.0);
+        }
     } else if (v_left > v_right) {
         // Turn left if strongest trail is to the left
         agent.angle += config.turn_speed * config.delta_time;
