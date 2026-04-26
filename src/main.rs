@@ -40,6 +40,7 @@ const DEFAULT_AGENT_COUNT: u32 = 1_500_000;
 const DEFAULT_DECAY: f32 = 1.0;
 const DEFAULT_DIFFUSE_SPEED: f32 = 60.0;
 const DEFAULT_DEPOSIT_AMOUNT: f32 = 0.5;
+const DEFAULT_SPAWN_RADIUS: f32 = 0.3;
 
 const DEFAULT_SPECIES_WEIGHTS: Vec4 = Vec4::new(1.0, 1.0, 1.0, 0.0);
 const DEFAULT_INTERACTION_MATRIX: [Vec4; 4] = [
@@ -91,7 +92,7 @@ fn main() {
                 diffuse_speed: DEFAULT_DIFFUSE_SPEED,
                 active_agents: DEFAULT_AGENT_COUNT,
                 deposit_amount: DEFAULT_DEPOSIT_AMOUNT,
-                _pad2: 0.0,
+                spawn_radius: DEFAULT_SPAWN_RADIUS,
                 interaction_matrix: DEFAULT_INTERACTION_MATRIX,
                 species_weights: DEFAULT_SPECIES_WEIGHTS,
             },
@@ -159,8 +160,8 @@ struct PhysarumConfig {
     active_agents: u32,
     /// Amount of pheromone an agent deposits each step.
     deposit_amount: f32,
-    /// Padding for WebGPU 16-byte uniform alignment (size must be multiple of 16).
-    _pad2: f32,
+    /// Radius of the spawn clusters as a percentage of the smallest window dimension.
+    spawn_radius: f32,
     /// Weights for species distribution (Red, Green, Blue, _unused).
     species_weights: Vec4,
     /// Matrix defining how each species (rows) interacts with each color channel (columns: R, G, B, A).
@@ -182,12 +183,14 @@ fn generate_agents(config: &PhysarumConfig) -> Vec<Agent> {
         1.0 / 3.0
     };
 
+    let width = config.width as f32;
+    let height = config.height as f32;
     let centers = [
-        Vec2::new(SIZE.0 as f32 / 2.0, SIZE.1 as f32 / 4.0),       // Species 0
-        Vec2::new(SIZE.0 as f32 / 4.0, SIZE.1 as f32 * 3.0 / 4.0), // Species 1
-        Vec2::new(SIZE.0 as f32 * 3.0 / 4.0, SIZE.1 as f32 * 3.0 / 4.0), // Species 2
+        Vec2::new(width / 2.0, height / 4.0),       // Species 0
+        Vec2::new(width / 4.0, height * 3.0 / 4.0), // Species 1
+        Vec2::new(width * 3.0 / 4.0, height * 3.0 / 4.0), // Species 2
     ];
-    let spawn_radius = 200.0;
+    let spawn_radius = config.spawn_radius * width.min(height);
 
     (0..MAX_AGENT_COUNT)
         .map(|_| {
@@ -425,6 +428,25 @@ fn physarum_ui(
                         egui::DragValue::new(&mut config.deposit_amount).speed(0.01),
                     );
                     ui.end_row();
+
+                    // Spawn Radius
+                    ui.label("Spawn Radius")
+                        .on_hover_text("The radius of the spawn clusters as a percentage of the smallest window dimension.");
+                    let mut spawn_radius_pct = config.spawn_radius * 100.0;
+                    let slider_res = ui.add_sized(
+                        [140.0, 20.0],
+                        egui::Slider::new(&mut spawn_radius_pct, 0.0..=100.0).show_value(false),
+                    );
+                    let drag_res = ui.add_sized(
+                        [60.0, 20.0],
+                        egui::DragValue::new(&mut spawn_radius_pct)
+                            .speed(0.1)
+                            .suffix("%"),
+                    );
+                    if slider_res.changed() || drag_res.changed() {
+                        config.spawn_radius = spawn_radius_pct / 100.0;
+                    }
+                    ui.end_row();
                 });
 
             ui.add_space(20.0);
@@ -495,6 +517,7 @@ fn physarum_ui(
                 config.decay = DEFAULT_DECAY;
                 config.active_agents = DEFAULT_AGENT_COUNT;
                 config.deposit_amount = DEFAULT_DEPOSIT_AMOUNT;
+                config.spawn_radius = DEFAULT_SPAWN_RADIUS;
                 config.species_weights = DEFAULT_SPECIES_WEIGHTS;
                 config.interaction_matrix = DEFAULT_INTERACTION_MATRIX;
             }

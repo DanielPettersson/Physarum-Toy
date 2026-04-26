@@ -18,7 +18,7 @@ struct Config {
     diffuse_speed: f32,
     active_agents: u32,
     deposit_amount: f32,
-    _pad2: f32,
+    spawn_radius: f32,
     species_weights: vec4<f32>,
     interaction_matrix: mat4x4<f32>,
 }
