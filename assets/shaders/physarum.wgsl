@@ -19,6 +19,10 @@ struct Config {
     active_agents: u32,
     deposit_amount: f32,
     spawn_radius: f32,
+    jitter_amount: f32,
+    _padding1: f32,
+    _padding2: f32,
+    _padding3: f32,
     species_weights: vec4<f32>,
     interaction_matrix: mat4x4<f32>,
 }
@@ -95,7 +99,7 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
         ) / total_weight;
         
         // Add random jitter even when following a trail to encourage branching
-        let jitter = (random_val - 0.5) * 2.0 * 0.1; 
+        let jitter = (random_val - 0.5) * 2.0 * config.jitter_amount; 
         agent.angle += (desired_offset + jitter) * config.turn_speed * config.delta_time;
     } else if (v_fwd < 0.0 || v_left < 0.0 || v_right < 0.0 || v_far_left < 0.0 || v_far_right < 0.0) {
         // Repulsion: Everything seen is negative or neutral. Steer away from strongest repulsion.

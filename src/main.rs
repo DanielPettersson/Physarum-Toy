@@ -41,6 +41,7 @@ const DEFAULT_DECAY: f32 = 1.0;
 const DEFAULT_DIFFUSE_SPEED: f32 = 60.0;
 const DEFAULT_DEPOSIT_AMOUNT: f32 = 0.007;
 const DEFAULT_SPAWN_RADIUS: f32 = 0.55;
+const DEFAULT_JITTER_AMOUNT: f32 = 0.1;
 
 const DEFAULT_SPECIES_WEIGHTS: Vec4 = Vec4::new(1.0, 1.0, 1.0, 0.0);
 const DEFAULT_INTERACTION_MATRIX: [Vec4; 4] = [
@@ -93,6 +94,10 @@ fn main() {
                 active_agents: DEFAULT_AGENT_COUNT,
                 deposit_amount: DEFAULT_DEPOSIT_AMOUNT,
                 spawn_radius: DEFAULT_SPAWN_RADIUS,
+                jitter_amount: DEFAULT_JITTER_AMOUNT,
+                _padding1: 0.0,
+                _padding2: 0.0,
+                _padding3: 0.0,
                 interaction_matrix: DEFAULT_INTERACTION_MATRIX,
                 species_weights: DEFAULT_SPECIES_WEIGHTS,
             },
@@ -162,6 +167,12 @@ struct PhysarumConfig {
     deposit_amount: f32,
     /// Radius of the spawn clusters as a percentage of the smallest window dimension.
     spawn_radius: f32,
+    /// Amount of random jitter added during trail tracking.
+    jitter_amount: f32,
+    /// Padding to align species_weights to 16 bytes and satisfy Pod/Zeroable.
+    _padding1: f32,
+    _padding2: f32,
+    _padding3: f32,
     /// Weights for species distribution (Red, Green, Blue, _unused).
     species_weights: Vec4,
     /// Matrix defining how each species (rows) interacts with each color channel (columns: R, G, B, A).
@@ -444,7 +455,7 @@ fn physarum_ui(
                         [140.0, 20.0],
                         egui::Slider::new(&mut spawn_radius_pct, 0.0..=100.0).show_value(false),
                     );
-                    let drag_res = ui.add_sized(
+                    ui.add_sized(
                         [60.0, 20.0],
                         egui::DragValue::new(&mut spawn_radius_pct)
                             .speed(0.1)
@@ -453,6 +464,32 @@ fn physarum_ui(
                     if slider_res.changed() || drag_res.changed() {
                         config.spawn_radius = spawn_radius_pct / 100.0;
                     }
+                    ui.end_row();
+
+                    // Jitter Amount
+                    ui.label("Jitter Amount")
+                        .on_hover_text("The amount of random jitter added during trail tracking to encourage branching.");
+                    ui.add_sized(
+                        [140.0, 20.0],
+                        egui::Slider::new(&mut config.jitter_amount, 0.0..=1.0).show_value(false),
+                    );
+                    ui.add_sized(
+                        [60.0, 20.0],
+                        egui::DragValue::new(&mut config.jitter_amount).speed(0.01),
+                    );
+                    ui.end_row();
+
+                    // Diffusion Speed
+                    ui.label("Diffusion Speed")
+                        .on_hover_text("The speed at which pheromones diffuse into neighboring areas.");
+                    ui.add_sized(
+                        [140.0, 20.0],
+                        egui::Slider::new(&mut config.diffuse_speed, 0.0..=200.0).show_value(false),
+                    );
+                    ui.add_sized(
+                        [60.0, 20.0],
+                        egui::DragValue::new(&mut config.diffuse_speed).speed(1.0),
+                    );
                     ui.end_row();
                 });
 
@@ -525,6 +562,7 @@ fn physarum_ui(
                 config.active_agents = DEFAULT_AGENT_COUNT;
                 config.deposit_amount = DEFAULT_DEPOSIT_AMOUNT;
                 config.spawn_radius = DEFAULT_SPAWN_RADIUS;
+                config.jitter_amount = DEFAULT_JITTER_AMOUNT;
                 config.species_weights = DEFAULT_SPECIES_WEIGHTS;
                 config.interaction_matrix = DEFAULT_INTERACTION_MATRIX;
             }
