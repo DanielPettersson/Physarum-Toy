@@ -69,8 +69,9 @@ fn main() {
             },
         })
         .add_message::<RespawnAgentsEvent>()
+        .init_resource::<UiState>()
         .add_systems(Startup, setup)
-        .add_systems(Update, (update_config, handle_window_resize, move_fps_overlay, handle_respawn))
+        .add_systems(Update, (update_config, handle_window_resize, move_fps_overlay, handle_respawn, toggle_ui))
         .add_systems(EguiPrimaryContextPass, physarum_ui)
         .add_plugins(PhysarumComputePlugin)
         .run();
