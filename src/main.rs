@@ -117,6 +117,8 @@ struct PhysarumResources {
     agents: Handle<ShaderStorageBuffer>,
     /// The trail map texture where pheromones are deposited and sensed.
     trail_map: Handle<Image>,
+    /// Temporary trail map for the two-pass diffusion.
+    trail_map_temp: Handle<Image>,
     /// The compute shader handle.
     shader: Handle<Shader>,
 }
@@ -251,7 +253,9 @@ fn setup(
     );
     image.texture_descriptor.usage |=
         TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
-    let trail_map_handle = images.add(image);
+    
+    let trail_map_handle = images.add(image.clone());
+    let trail_map_temp_handle = images.add(image);
 
     // Initialize agents
     let agents_data = generate_agents(&config_res.config);
@@ -261,6 +265,7 @@ fn setup(
     commands.insert_resource(PhysarumResources {
         agents: agents_buffer,
         trail_map: trail_map_handle.clone(),
+        trail_map_temp: trail_map_temp_handle,
         shader,
     });
 
@@ -298,8 +303,15 @@ fn handle_window_resize(
         config_res.config.width = new_width;
         config_res.config.height = new_height;
 
-        // Resize the trail map image
+        // Resize the trail map images
         if let Some(image) = images.get_mut(&resources.trail_map) {
+            image.resize(Extent3d {
+                width: new_width,
+                height: new_height,
+                depth_or_array_layers: 1,
+            });
+        }
+        if let Some(image) = images.get_mut(&resources.trail_map_temp) {
             image.resize(Extent3d {
                 width: new_width,
                 height: new_height,
@@ -334,6 +346,13 @@ fn handle_respawn(
     }
 
     if let Some(image) = images.get_mut(&resources.trail_map) {
+        if let Some(data) = &mut image.data {
+            data.chunks_exact_mut(8).for_each(|chunk| {
+                chunk.copy_from_slice(&[0, 0, 0, 0, 0, 0, 0, 60]);
+            });
+        }
+    }
+    if let Some(image) = images.get_mut(&resources.trail_map_temp) {
         if let Some(data) = &mut image.data {
             data.chunks_exact_mut(8).for_each(|chunk| {
                 chunk.copy_from_slice(&[0, 0, 0, 0, 0, 0, 0, 60]);
@@ -631,10 +650,14 @@ impl Plugin for PhysarumComputePlugin {
 struct PhysarumPipeline {
     /// Pipeline for the agent simulation step.
     simulate_pipeline: Option<CachedComputePipelineId>,
-    /// Pipeline for the pheromone diffusion and decay step.
-    diffuse_pipeline: Option<CachedComputePipelineId>,
+    /// Pipeline for the horizontal diffusion pass.
+    diffuse_h_pipeline: Option<CachedComputePipelineId>,
+    /// Pipeline for the vertical diffusion pass.
+    diffuse_v_pipeline: Option<CachedComputePipelineId>,
     /// The common bind group layout used by both pipelines.
     bind_group_layout: Option<BindGroupLayout>,
+    /// Persistent uniform buffer for configuration.
+    config_buffer: Option<UniformBuffer<PhysarumConfig>>,
 }
 
 /// Wrapper for the GPU bind group used in the compute shader.
@@ -689,6 +712,16 @@ fn prepare_bind_group(
                 },
                 count: None,
             },
+            BindGroupLayoutEntry {
+                binding: 3,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::StorageTexture {
+                    access: StorageTextureAccess::ReadWrite,
+                    format: TextureFormat::Rgba16Float,
+                    view_dimension: TextureViewDimension::D2,
+                },
+                count: None,
+            },
         ];
 
         let layout_descriptor = BindGroupLayoutDescriptor {
@@ -710,22 +743,38 @@ fn prepare_bind_group(
             },
         ));
 
-        pipeline.diffuse_pipeline = Some(pipeline_cache.queue_compute_pipeline(
+        pipeline.diffuse_h_pipeline = Some(pipeline_cache.queue_compute_pipeline(
             ComputePipelineDescriptor {
-                label: Some("physarum_diffuse_pipeline".into()),
+                label: Some("physarum_diffuse_h_pipeline".into()),
+                layout: vec![layout_descriptor.clone()],
+                push_constant_ranges: vec![],
+                shader: resources.shader.clone(),
+                shader_defs: vec![],
+                entry_point: Some("diffuse_h".into()),
+                zero_initialize_workgroup_memory: false,
+            },
+        ));
+
+        pipeline.diffuse_v_pipeline = Some(pipeline_cache.queue_compute_pipeline(
+            ComputePipelineDescriptor {
+                label: Some("physarum_diffuse_v_pipeline".into()),
                 layout: vec![layout_descriptor],
                 push_constant_ranges: vec![],
                 shader: resources.shader.clone(),
                 shader_defs: vec![],
-                entry_point: Some("diffuse".into()),
+                entry_point: Some("diffuse_v".into()),
                 zero_initialize_workgroup_memory: false,
             },
         ));
 
         pipeline.bind_group_layout = Some(layout);
+        pipeline.config_buffer = Some(UniformBuffer::from(config_res.config));
     }
 
     let Some(trail_map) = render_assets.get(&resources.trail_map) else {
+        return;
+    };
+    let Some(trail_map_temp) = render_assets.get(&resources.trail_map_temp) else {
         return;
     };
     let Some(agents_buffer) = render_buffers.get(&resources.agents) else {
@@ -738,13 +787,23 @@ fn prepare_bind_group(
         return;
     };
 
-    // Create a temporary buffer for the config uniform
-    let mut config_buffer = UniformBuffer::from(config_res.config);
+    let PhysarumPipeline {
+        bind_group_layout,
+        config_buffer,
+        ..
+    } = &mut *pipeline;
+
+    let layout = bind_group_layout.as_ref().unwrap();
+    let config_buffer = config_buffer.as_mut().unwrap();
+
+    // Update the existing uniform buffer
+    config_buffer.set(config_res.config);
     config_buffer.write_buffer(&render_device, &render_queue);
+    let config_buffer_binding = config_buffer.buffer().unwrap().as_entire_binding();
 
     let bind_group = render_device.create_bind_group(
         "physarum_bind_group",
-        pipeline.bind_group_layout.as_ref().unwrap(),
+        layout,
         &[
             BindGroupEntry {
                 binding: 0,
@@ -756,7 +815,11 @@ fn prepare_bind_group(
             },
             BindGroupEntry {
                 binding: 2,
-                resource: config_buffer.buffer().unwrap().as_entire_binding(),
+                resource: config_buffer_binding,
+            },
+            BindGroupEntry {
+                binding: 3,
+                resource: BindingResource::TextureView(&trail_map_temp.texture_view),
             },
         ],
     );
@@ -783,14 +846,20 @@ impl render_graph::Node for PhysarumNode {
         let Some(simulate_id) = pipeline.simulate_pipeline else {
             return Ok(());
         };
-        let Some(diffuse_id) = pipeline.diffuse_pipeline else {
+        let Some(diffuse_h_id) = pipeline.diffuse_h_pipeline else {
+            return Ok(());
+        };
+        let Some(diffuse_v_id) = pipeline.diffuse_v_pipeline else {
             return Ok(());
         };
 
         let Some(simulate_pipeline) = pipeline_cache.get_compute_pipeline(simulate_id) else {
             return Ok(());
         };
-        let Some(diffuse_pipeline) = pipeline_cache.get_compute_pipeline(diffuse_id) else {
+        let Some(diffuse_h_pipeline) = pipeline_cache.get_compute_pipeline(diffuse_h_id) else {
+            return Ok(());
+        };
+        let Some(diffuse_v_pipeline) = pipeline_cache.get_compute_pipeline(diffuse_v_id) else {
             return Ok(());
         };
 
@@ -812,8 +881,12 @@ impl render_graph::Node for PhysarumNode {
         pass.set_pipeline(simulate_pipeline);
         pass.dispatch_workgroups((active_agents + 63) / 64, 1, 1);
 
-        // Diffuse
-        pass.set_pipeline(diffuse_pipeline);
+        // Diffuse Horizontal
+        pass.set_pipeline(diffuse_h_pipeline);
+        pass.dispatch_workgroups((width + 15) / 16, (height + 15) / 16, 1);
+
+        // Diffuse Vertical
+        pass.set_pipeline(diffuse_v_pipeline);
         pass.dispatch_workgroups((width + 15) / 16, (height + 15) / 16, 1);
 
         Ok(())

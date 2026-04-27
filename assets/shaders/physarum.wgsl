@@ -36,6 +36,9 @@ var trail_map: texture_storage_2d<rgba16float, read_write>;
 @group(0) @binding(2)
 var<uniform> config: Config;
 
+@group(0) @binding(3)
+var trail_map_temp: texture_storage_2d<rgba16float, read_write>;
+
 // Simple pseudo-random function for agent behavior
 fn hash(u: u32) -> u32 {
     var x = u;
@@ -161,9 +164,9 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(trail_map, vec2<i32>(x, y), new_val);
 }
 
-/// Pheromone diffusion and decay step: Spreads trails and reduces intensity over time.
+/// Horizontal blur pass
 @compute @workgroup_size(16, 16)
-fn diffuse(@builtin(global_invocation_id) id: vec3<u32>) {
+fn diffuse_h(@builtin(global_invocation_id) id: vec3<u32>) {
     let x = i32(id.x);
     let y = i32(id.y);
     
@@ -171,17 +174,32 @@ fn diffuse(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     
-    // Average values in 3x3 neighborhood (Box Blur)
     var sum = vec4<f32>(0.0);
     for (var i = -1; i <= 1; i++) {
-        for (var j = -1; j <= 1; j++) {
-            let nx = (x + i + i32(config.width)) % i32(config.width);
-            let ny = (y + j + i32(config.height)) % i32(config.height);
-            sum += textureLoad(trail_map, vec2<i32>(nx, ny));
-        }
+        let nx = (x + i + i32(config.width)) % i32(config.width);
+        sum += textureLoad(trail_map, vec2<i32>(nx, y));
     }
     
-    let blurred = sum / 9.0;
+    textureStore(trail_map_temp, vec2<i32>(x, y), sum / 3.0);
+}
+
+/// Vertical blur pass with mixing and decay
+@compute @workgroup_size(16, 16)
+fn diffuse_v(@builtin(global_invocation_id) id: vec3<u32>) {
+    let x = i32(id.x);
+    let y = i32(id.y);
+    
+    if (x >= i32(config.width) || y >= i32(config.height)) {
+        return;
+    }
+    
+    var sum = vec4<f32>(0.0);
+    for (var i = -1; i <= 1; i++) {
+        let ny = (y + i + i32(config.height)) % i32(config.height);
+        sum += textureLoad(trail_map_temp, vec2<i32>(x, ny));
+    }
+    
+    let blurred = sum / 3.0;
     
     // Time-dependent diffusion: Mix original pixel with blurred pixel based on speed and delta_time
     let original = textureLoad(trail_map, vec2<i32>(x, y));
